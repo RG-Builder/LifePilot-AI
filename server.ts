@@ -41,51 +41,91 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  const parseTaskId = (idParam: string): number | null => {
+    const parsed = Number(idParam);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      return null;
+    }
+    return parsed;
+  };
+
+  const validateTaskPayload = (body: any): string | null => {
+    const { title, importance, duration, deadline } = body;
+
+    if (typeof title !== "string" || title.trim().length === 0) {
+      return "Title is required";
+    }
+    if (title.length > 120) {
+      return "Title must be 120 characters or fewer";
+    }
+    if (typeof importance !== "number") {
+      return "Importance must be a number";
+    }
+    if (importance < 1 || importance > 10) {
+      return "Importance must be between 1 and 10";
+    }
+    if (typeof duration !== "number") {
+      return "Duration must be a number";
+    }
+    if (duration <= 0 || duration > 1440) {
+      return "Duration must be between 1 and 1440";
+    }
+    if (deadline !== undefined && deadline !== null) {
+      const parsed = new Date(deadline);
+      if (Number.isNaN(parsed.getTime())) {
+        return "Deadline must be a valid datetime";
+      }
+    }
+    return null;
+  };
+
   app.use(express.json());
 
   // API Endpoints
   app.post("/api/tasks", (req, res) => {
     const { title, importance, duration, is_habit, deadline } = req.body;
-    if (!title || typeof importance !== 'number' || typeof duration !== 'number') {
-      return res.status(400).json({ error: "Missing or invalid required fields" });
-    }
-    if (importance < 1 || importance > 10) {
-      return res.status(400).json({ error: "Importance must be between 1 and 10" });
-    }
-    if (duration <= 0) {
-      return res.status(400).json({ error: "Duration must be greater than 0" });
+    const validationError = validateTaskPayload(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
     const stmt = db.prepare("INSERT INTO tasks (title, importance, duration, is_habit, deadline) VALUES (?, ?, ?, ?, ?)");
     const info = stmt.run(title, importance, duration, is_habit ? 1 : 0, deadline || null);
-    res.json({ id: info.lastInsertRowid, title, importance, duration, is_habit, deadline, status: "pending" });
+    res.status(201).json({ id: info.lastInsertRowid, title, importance, duration, is_habit: Boolean(is_habit), deadline: deadline || null, status: "pending" });
   });
 
   app.put("/api/tasks/:id", (req, res) => {
-    const { id } = req.params;
+    const parsedId = parseTaskId(req.params.id);
+    if (parsedId === null) {
+      return res.status(400).json({ error: "Invalid task id" });
+    }
+
     const { title, importance, duration, is_habit, deadline } = req.body;
-    
-    if (!title || typeof importance !== 'number' || typeof duration !== 'number') {
-      return res.status(400).json({ error: "Missing or invalid required fields" });
-    }
-    if (importance < 1 || importance > 10) {
-      return res.status(400).json({ error: "Importance must be between 1 and 10" });
-    }
-    if (duration <= 0) {
-      return res.status(400).json({ error: "Duration must be greater than 0" });
+
+    const validationError = validateTaskPayload(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
     const stmt = db.prepare("UPDATE tasks SET title = ?, importance = ?, duration = ?, is_habit = ?, deadline = ? WHERE id = ?");
-    stmt.run(title, importance, duration, is_habit ? 1 : 0, deadline || null, id);
+    const result = stmt.run(title, importance, duration, is_habit ? 1 : 0, deadline || null, parsedId);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
     res.json({ success: true });
   });
 
   app.delete("/api/tasks/:id", (req, res) => {
-    const { id } = req.params;
-    console.log("DELETE request for task id:", id);
+    const parsedId = parseTaskId(req.params.id);
+    if (parsedId === null) {
+      return res.status(400).json({ error: "Invalid task id" });
+    }
+
     const stmt = db.prepare("DELETE FROM tasks WHERE id = ?");
-    const info = stmt.run(Number(id));
-    console.log("Delete result:", info);
+    const info = stmt.run(parsedId);
+    if (info.changes === 0) {
+      return res.status(404).json({ error: "Task not found" });
+    }
     res.json({ success: true });
   });
 
@@ -95,8 +135,12 @@ async function startServer() {
   });
 
   app.post("/api/tasks/:id/toggle", (req, res) => {
-    const { id } = req.params;
-    const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(Number(id)) as any;
+    const parsedId = parseTaskId(req.params.id);
+    if (parsedId === null) {
+      return res.status(400).json({ error: "Invalid task id" });
+    }
+
+    const task = db.prepare("SELECT * FROM tasks WHERE id = ?").get(parsedId) as any;
     
     if (!task) return res.status(404).json({ error: "Task not found" });
 
@@ -119,15 +163,15 @@ async function startServer() {
         }
         
         const stmt = db.prepare("UPDATE tasks SET status = 'completed', streak = ?, last_completed_at = ? WHERE id = ?");
-        stmt.run(newStreak, now.toISOString(), id);
+        stmt.run(newStreak, now.toISOString(), parsedId);
       } else {
         const stmt = db.prepare("UPDATE tasks SET status = 'completed', last_completed_at = ? WHERE id = ?");
-        stmt.run(now.toISOString(), id);
+        stmt.run(now.toISOString(), parsedId);
       }
     } else {
       // Reverting to pending
       const stmt = db.prepare("UPDATE tasks SET status = 'pending' WHERE id = ?");
-      stmt.run(id);
+      stmt.run(parsedId);
     }
     
     res.json({ success: true, status: newStatus, streak: newStreak });
@@ -209,7 +253,7 @@ async function startServer() {
         ...task,
         startTime: startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
         endTime: endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
-        isOverdue: task.deadline && new Date(task.deadline) < now
+        isOverdue: Boolean(task.deadline && new Date(task.deadline) < now)
       };
     });
 
