@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1024422333401",
+    "project_id": "gen-lang-client-0335857006",
+    "storage_bucket": "gen-lang-client-0335857006.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1024422333401:android:28b917054726c820fde7c8",
+        "android_client_info": {
+          "package_name": "com.LifePilotAI.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1024422333401-an2lonli4kamlpfcld9hsp3phg8uhlfh.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAIykASrGRcHQP3h6UFqyho1svA8Y0bdVs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1024422333401-an2lonli4kamlpfcld9hsp3phg8uhlfh.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

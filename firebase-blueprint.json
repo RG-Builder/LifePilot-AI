@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and subscription information",
+      "type": "object",
+      "properties": {
+        "firebase_uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "subscription_plan": { "type": "string", "enum": ["trial", "premium"] },
+        "trial_used": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["firebase_uid", "email"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "A task or habit for the user",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "title": { "type": "string" },
+        "importance": { "type": "integer" },
+        "duration": { "type": "integer" },
+        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "is_habit": { "type": "boolean" },
+        "streak": { "type": "integer" },
+        "deadline": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "title"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/users/{userId}/tasks/{taskId}": {
+      "schema": "Task",
+      "description": "User specific tasks"
+    }
+  }
+}

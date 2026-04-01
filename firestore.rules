@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (Firebase UID)
+    // Fields:
+    //   - firebase_uid: string (required)
+    //   - email: string (required, email format)
+    //   - subscription_plan: string (trial, premium)
+    //   - role: string (admin, user)
+    //   - trial_used: int
+    //   - created_at: timestamp
+    //
+    // Collection: users/{userId}/tasks
+    // Document ID: {taskId}
+    // Fields:
+    //   - user_id: string (required, matches parent userId)
+    //   - title: string (required, max 200 chars)
+    //   - importance: int (1-10)
+    //   - duration: int (positive)
+    //   - status: string (pending, completed)
+    //   - is_habit: bool
+    //   - streak: int
+    //   - deadline: timestamp
+    //   - created_at: timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "realprouser1234@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.size() <= 100 && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(allowedFields) {
+      return request.resource.data.keys().hasOnly(allowedFields);
+    }
+
+    function hasRequiredFields(requiredFields) {
+      return request.resource.data.keys().hasAll(requiredFields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasRequiredFields(['firebase_uid', 'email', 'subscription_plan', 'role', 'created_at']) &&
+             hasOnlyAllowedFields(['firebase_uid', 'email', 'subscription_plan', 'role', 'trial_used', 'created_at']) &&
+             data.firebase_uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             (data.subscription_plan in ['trial', 'premium']) &&
+             (data.role in ['admin', 'user']) &&
+             (data.trial_used == null || data.trial_used is int) &&
+             data.created_at is timestamp;
+    }
+
+    function isValidTask(data, userId) {
+      return hasRequiredFields(['user_id', 'title', 'importance', 'duration', 'status', 'is_habit', 'streak', 'created_at']) &&
+             hasOnlyAllowedFields(['user_id', 'title', 'importance', 'duration', 'status', 'is_habit', 'streak', 'deadline', 'created_at']) &&
+             data.user_id == userId &&
+             data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+             data.importance is int && data.importance >= 1 && data.importance <= 10 &&
+             data.duration is int && data.duration >= 0 &&
+             (data.status in ['pending', 'completed']) &&
+             data.is_habit is bool &&
+             data.streak is int &&
+             (data.deadline == null || data.deadline is timestamp) &&
+             data.created_at is timestamp;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                       request.resource.data.role == 'user'; // Users can only create themselves as 'user'
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                       request.resource.data.firebase_uid == resource.data.firebase_uid &&
+                       (request.resource.data.role == resource.data.role || isAdmin()); // Only admins can change roles
+      
+      match /tasks/{taskId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create: if isOwner(userId) && isValidTask(request.resource.data, userId);
+        allow update: if isOwner(userId) && isValidTask(request.resource.data, userId) &&
+                         request.resource.data.user_id == resource.data.user_id;
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}
