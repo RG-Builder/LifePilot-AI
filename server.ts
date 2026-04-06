@@ -15,7 +15,9 @@ import cors from "cors";
 import helmet from "helmet";
 import compression from "compression";
 import { rateLimit } from 'express-rate-limit';
-import { GoogleGenAI } from "@google/genai";
+import axios from "axios";
+import validator from "validator";
+import { OpenRouter } from "@openrouter/sdk";
 
 dotenv.config();
 
@@ -62,106 +64,190 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("tasks.db");
-
-// Initialize Database with new tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    firebase_uid TEXT UNIQUE,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT,
-    subscription_plan TEXT DEFAULT 'trial',
-    trial_used INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS subscriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    plan_type TEXT,
-    status TEXT,
-    start_date DATETIME,
-    expiry_date DATETIME,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS usage_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    tokens_used INTEGER,
-    cost REAL,
-    request_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS ip_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    ip_address TEXT,
-    device_id TEXT,
-    request_time DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    importance INTEGER DEFAULT 5,
-    duration INTEGER DEFAULT 30,
-    status TEXT DEFAULT 'pending',
-    is_habit INTEGER DEFAULT 0,
-    streak INTEGER DEFAULT 0,
-    deadline DATETIME,
-    category TEXT DEFAULT 'general',
-    last_completed_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS habits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT,
-    frequency TEXT DEFAULT 'daily',
-    goal_count INTEGER DEFAULT 1,
-    streak INTEGER DEFAULT 0,
-    last_completed_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS habit_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    habit_id INTEGER NOT NULL,
-    completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(habit_id) REFERENCES habits(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS payments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    razorpay_order_id TEXT,
-    razorpay_payment_id TEXT,
-    amount REAL,
-    status TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-`);
-
-// Migrations for existing users
-const migrations = [
-  "ALTER TABLE users ADD COLUMN firebase_uid TEXT",
-  "ALTER TABLE users ADD COLUMN subscription_plan TEXT DEFAULT 'trial'",
-  "ALTER TABLE users ADD COLUMN trial_used INTEGER DEFAULT 0",
-];
-migrations.forEach(m => { try { db.exec(m); } catch (e) {} });
+// Database will be initialized inside startServer
 
 async function startServer() {
+  console.log("startServer function called...");
+  
+  // Initialize Database inside startServer to catch errors
+  let db: any;
+  try {
+    db = new Database("tasks.db");
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        firebase_uid TEXT UNIQUE,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT,
+        subscription_plan TEXT DEFAULT 'trial',
+        role TEXT DEFAULT 'user',
+        trial_used INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        plan_type TEXT,
+        status TEXT,
+        start_date DATETIME,
+        expiry_date DATETIME,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS usage_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        tokens_used INTEGER,
+        cost REAL,
+        request_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS ip_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        ip_address TEXT,
+        device_id TEXT,
+        request_time DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        importance INTEGER DEFAULT 5,
+        urgency_score INTEGER DEFAULT 5,
+        estimated_effort INTEGER DEFAULT 3,
+        impact_level INTEGER DEFAULT 5,
+        duration INTEGER DEFAULT 30,
+        status TEXT DEFAULT 'pending',
+        is_habit INTEGER DEFAULT 0,
+        streak INTEGER DEFAULT 0,
+        deadline DATETIME,
+        category TEXT DEFAULT 'general',
+        last_completed_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL UNIQUE,
+        morning_person_score REAL DEFAULT 0.5,
+        peak_energy_start TEXT DEFAULT '09:00',
+        peak_energy_end TEXT DEFAULT '11:00',
+        focus_duration_avg INTEGER DEFAULT 25,
+        daily_routine_json TEXT,
+        last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS goals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        type TEXT DEFAULT 'short-term',
+        status TEXT DEFAULT 'active',
+        target_date DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS focus_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        task_id INTEGER,
+        start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        end_time DATETIME,
+        duration_minutes INTEGER,
+        distractions_count INTEGER DEFAULT 0,
+        efficiency_score INTEGER,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(task_id) REFERENCES tasks(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_insights (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        insight_text TEXT NOT NULL,
+        type TEXT,
+        is_read INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS energy_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        energy_level INTEGER,
+        logged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS habits (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        frequency TEXT DEFAULT 'daily',
+        goal_count INTEGER DEFAULT 1,
+        streak INTEGER DEFAULT 0,
+        last_completed_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS habit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        habit_id INTEGER NOT NULL,
+        completed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(habit_id) REFERENCES habits(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        razorpay_order_id TEXT,
+        razorpay_payment_id TEXT,
+        amount REAL,
+        status TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_cache (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        prompt_hash TEXT UNIQUE,
+        response TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Migrations for existing users
+    const migrations = [
+      "ALTER TABLE users ADD COLUMN firebase_uid TEXT",
+      "ALTER TABLE users ADD COLUMN subscription_plan TEXT DEFAULT 'trial'",
+      "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'",
+      "ALTER TABLE users ADD COLUMN trial_used INTEGER DEFAULT 0",
+      "ALTER TABLE tasks ADD COLUMN urgency_score INTEGER DEFAULT 5",
+      "ALTER TABLE tasks ADD COLUMN estimated_effort INTEGER DEFAULT 3",
+      "ALTER TABLE tasks ADD COLUMN impact_level INTEGER DEFAULT 5",
+    ];
+    migrations.forEach(m => { try { db.exec(m); } catch (e) {} });
+    console.log("Database initialized successfully.");
+  } catch (e: any) {
+    console.error("Database initialization failed:", e.message);
+    throw e; // Re-throw to be caught by startServer().catch()
+  }
+
   const app = express();
   const PORT = 3000;
+
+  // Trust proxy is required when running behind a load balancer (like Cloud Run)
+  // to correctly identify client IP for rate limiting.
+  app.set('trust proxy', 1);
 
   // Global Rate Limiting
   const globalLimiter = rateLimit({
@@ -185,19 +271,45 @@ async function startServer() {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://checkout.razorpay.com"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://checkout.razorpay.com", "https://*.googleapis.com", "https://*.googletagmanager.com", "https://www.gstatic.com", "https://*.firebaseapp.com", "https://*.firebaseauth.com", "https://apis.google.com", "https://accounts.google.com"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com"],
-        imgSrc: ["'self'", "data:", "https://picsum.photos", "https://lh3.googleusercontent.com"],
-        connectSrc: ["'self'", "https://ais-dev-gwpcgulsgzjfoa24agrtun-551522318424.asia-southeast1.run.app", "https://ais-pre-gwpcgulsgzjfoa24agrtun-551522318424.asia-southeast1.run.app", "https://api.razorpay.com", "https://lumberjack.razorpay.com"],
-        frameSrc: ["'self'", "https://api.razorpay.com"],
+        imgSrc: ["'self'", "data:", "https://picsum.photos", "https://lh3.googleusercontent.com", "https://*.google-analytics.com", "https://*.google.com"],
+        connectSrc: [
+          "'self'", 
+          "https://*.run.app",
+          "https://api.razorpay.com", 
+          "https://lumberjack.razorpay.com",
+          "https://*.googleapis.com",
+          "https://*.firebaseio.com",
+          "https://*.firebaseapp.com",
+          "https://*.firebaseauth.com",
+          "https://*.firebasestorage.app",
+          "https://*.google-analytics.com",
+          "https://*.googletagmanager.com",
+          "https://*.google.com",
+          "https://*.gstatic.com",
+          "https://apis.google.com",
+          "https://accounts.google.com"
+        ],
+        frameSrc: ["'self'", "https://api.razorpay.com", "https://*.firebaseapp.com", "https://*.firebaseauth.com", "https://*.google.com", "https://accounts.google.com"],
+        frameAncestors: ["'self'", "https://*.google.com", "https://*.run.app", "http://localhost:*", "https://*.firebaseapp.com", "https://*.firebaseauth.com"],
       },
     },
     crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    frameguard: false,
   }));
   app.use(cors());
   app.use(compression());
   app.use(express.json());
+  app.get("/manifest.json", (req, res) => {
+    res.sendFile(path.join(__dirname, "manifest.json"));
+  });
+  app.get("/robots.txt", (req, res) => {
+    res.sendFile(path.join(__dirname, "robots.txt"));
+  });
+
   app.use("/api", globalLimiter);
 
   // Auth Middleware
@@ -206,8 +318,12 @@ async function startServer() {
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.status(401).json({ error: "Access denied" });
 
-    jwt.verify(token, process.env.JWT_SECRET || 'secret', (err: any, user: any) => {
+    jwt.verify(token, process.env.JWT_SECRET || 'dev_secret_only', (err: any, user: any) => {
       if (err) return res.status(403).json({ error: "Invalid token" });
+      if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev_secret_only')) {
+        console.error("CRITICAL SECURITY ERROR: JWT_SECRET is not set in production!");
+        return res.status(500).json({ error: "Server configuration error" });
+      }
       req.user = user;
       next();
     });
@@ -280,107 +396,346 @@ async function startServer() {
     const token = authHeader && authHeader.split(' ')[1];
     
     if (!token || token === 'null' || token === 'undefined') {
-      return res.status(401).json({ error: "No token provided" });
+      return res.status(401).json({ error: "Authentication required" });
     }
 
     try {
-      // If Firebase Admin is not initialized, fallback to our JWT for demo purposes
+      // In production, Firebase Admin MUST be initialized
+      if (process.env.NODE_ENV === 'production' && !firebaseAdminInitialized) {
+        console.error("CRITICAL: Firebase Admin not initialized in production!");
+        return res.status(500).json({ error: "Internal server error" });
+      }
+
+      // Fallback for development if service account is missing
       if (!firebaseAdminInitialized) {
         return authenticateToken(req, res, next);
       }
 
       const decodedToken = await admin.auth().verifyIdToken(token);
+      
+      // Fetch user from local DB using Firebase UID
       let user = db.prepare("SELECT * FROM users WHERE firebase_uid = ?").get(decodedToken.uid) as any;
       
       if (!user) {
-        const stmt = db.prepare("INSERT INTO users (firebase_uid, email, subscription_plan) VALUES (?, ?, ?)");
-        const info = stmt.run(decodedToken.uid, decodedToken.email, 'trial');
-        user = { id: info.lastInsertRowid, firebase_uid: decodedToken.uid, email: decodedToken.email, subscription_plan: 'trial' };
+        // Create user if they don't exist in our local DB
+        const stmt = db.prepare("INSERT INTO users (firebase_uid, email, subscription_plan, role, trial_used) VALUES (?, ?, ?, ?, ?)");
+        const info = stmt.run(decodedToken.uid, decodedToken.email, 'trial', 'user', 0);
+        user = { 
+          id: info.lastInsertRowid, 
+          firebase_uid: decodedToken.uid, 
+          email: decodedToken.email, 
+          subscription_plan: 'trial',
+          role: 'user',
+          trial_used: 0
+        };
+        console.log(`New user registered: ${decodedToken.email} (${decodedToken.uid})`);
       }
       
       req.user = user;
       next();
     } catch (error: any) {
-      console.error("Firebase token verification failed:", error);
+      console.error("Auth Error:", error.message);
       
-      // Check for project mismatch (aud claim error)
-      if (error.message && error.message.includes('incorrect "aud" (audience) claim')) {
-        return res.status(401).json({ 
-          error: "Project Mismatch", 
-          message: "Your browser is sending a token from an old project. Please sign out and sign in again." 
-        });
+      if (error.code === 'auth/id-token-expired') {
+        return res.status(401).json({ error: "Token expired", code: "TOKEN_EXPIRED" });
       }
       
-      res.status(401).json({ error: "Invalid Firebase token", message: error.message });
+      res.status(401).json({ error: "Invalid authentication" });
     }
   };
 
-  // AI Gateway Logic
-  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) {
-    console.warn("WARNING: GEMINI_API_KEY is not set. AI features will fail.");
-  }
+  // AI Gateway Logic (OpenRouter Multi-Model)
+  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+  
+  const openrouter = new OpenRouter({
+    apiKey: OPENROUTER_API_KEY || ""
+  });
 
-  app.post("/api/ai/generate", verifyFirebaseToken, aiLimiter, async (req: any, res: any) => {
-    let { prompt, systemInstruction } = req.body;
-    const userId = req.user.id;
+  const AI_MODELS = {
+    PRIMARY: "qwen/qwen-plus", // Qwen Plus for complex logic (resolved 'No endpoints found' error)
+    FAST: "stepfun/step-3.5-flash:free"      // Step 3.5 Flash for quick responses and fallback
+  };
 
-    if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+  const handle_ai_request = async (user: any, prompt: string, taskType: 'simple' | 'complex' = 'simple', systemInstruction: string = "You are a helpful assistant.") => {
+    const userId = user.id;
+    const plan = user.subscription_plan;
 
-    // Basic Input Sanitization
-    prompt = String(prompt).substring(0, 2000); // Limit prompt length
-    systemInstruction = String(systemInstruction || "You are a helpful assistant.").substring(0, 1000);
+    if (!OPENROUTER_API_KEY) {
+      throw new Error("AI service configuration error: API key is missing.");
+    }
 
-    // Check plan limits
-    const plan = req.user.subscription_plan;
+    // 1. Check Caching (Optimization: minimize redundant calls)
+    const promptHash = crypto.createHash('sha256').update(prompt + systemInstruction).digest('hex');
+    const cachedResponse = db.prepare("SELECT response FROM ai_cache WHERE prompt_hash = ?").get(promptHash) as any;
+    if (cachedResponse) {
+      console.log(`AI Cache Hit for user ${userId}`);
+      return { text: cachedResponse.response, cached: true };
+    }
+
+    // 2. Cost Control & Limits (Strict enforcement)
     const dailyRequests = db.prepare("SELECT COUNT(*) as count FROM usage_logs WHERE user_id = ? AND date(request_time) = date('now')").get(userId) as any;
-    
-    if (plan === 'trial' && dailyRequests.count >= 3) {
-      return res.status(403).json({ error: "Trial limit reached (3 requests). Please upgrade to Premium." });
-    } else if (plan === 'premium' && dailyRequests.count >= 50) {
-      return res.status(403).json({ error: "Daily premium limit reached (50 requests)." });
-    }
-
     const monthlyTokens = db.prepare("SELECT SUM(tokens_used) as total FROM usage_logs WHERE user_id = ? AND strftime('%m', request_time) = strftime('%m', 'now')").get(userId) as any;
-    const tokenLimit = plan === 'trial' ? 10000 : 200000;
-    if ((monthlyTokens.total || 0) >= tokenLimit) {
-      return res.status(403).json({ error: `Monthly token limit reached (${tokenLimit} tokens).` });
+    const totalRequests = db.prepare("SELECT COUNT(*) as count FROM usage_logs WHERE user_id = ?").get(userId) as any;
+
+    // Free users: max 3 total. Premium: 50/day.
+    const limits = plan === 'trial' 
+      ? { requests: Infinity, tokens: 10000, total: 3 } 
+      : { requests: 50, tokens: 200000, total: Infinity };
+
+    if (plan === 'trial' && totalRequests.count >= limits.total) {
+      throw new Error("Free tier limit reached (max 3 requests total). Please upgrade to Premium.");
+    }
+    if (dailyRequests.count >= limits.requests) {
+      throw new Error(`Daily limit reached (50 requests/day). Please try again tomorrow.`);
+    }
+    if ((monthlyTokens.total || 0) >= limits.tokens) {
+      throw new Error("Monthly token limit reached.");
     }
 
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          systemInstruction: systemInstruction
+    // 3. Model Routing Logic (Cost-optimized)
+    // Simple tasks -> Step Flash. Complex tasks -> Qwen 3.6.
+    const selectedModel = taskType === 'simple' ? AI_MODELS.FAST : AI_MODELS.PRIMARY;
+
+    const callAI = async (model: string) => {
+      // Use streaming internally to capture reasoning tokens as per user requirement
+      const stream = await (openrouter.chat as any).send({
+        chatGenerationParams: {
+          model: model,
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: prompt }
+          ],
+          stream: true,
+          provider: {
+            sort: "throughput"
+          }
+        }
+      }, {
+        headers: {
+          "HTTP-Referer": process.env.APP_URL || "https://ai.studio/build",
+          "X-Title": "AI Studio Build Applet"
         }
       });
 
-      const aiText = response.text;
-      
-      // Log usage (estimate tokens by length for now as SDK doesn't provide it easily)
-      const estimatedTokens = Math.ceil((prompt.length + (aiText?.length || 0)) / 4);
-      db.prepare("INSERT INTO usage_logs (user_id, tokens_used, cost) VALUES (?, ?, ?)").run(userId, estimatedTokens, 0);
+      let responseText = "";
+      let usage: any = null;
+      let reasoningTokens = 0;
 
-      res.json({ text: aiText });
+      for await (const chunk of (stream as any)) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          responseText += content;
+        }
+        if (chunk.usage) {
+          usage = chunk.usage;
+          if (chunk.usage.reasoningTokens) {
+            reasoningTokens = chunk.usage.reasoningTokens;
+            console.log(`\nReasoning tokens for user ${userId}:`, reasoningTokens);
+          }
+        }
+      }
+
+      return {
+        text: responseText,
+        usage: usage,
+        model: model,
+        reasoningTokens: reasoningTokens
+      };
+    };
+
+    try {
+      let result;
+      try {
+        console.log(`Calling AI Model: ${selectedModel} for user ${userId} (Task: ${taskType})`);
+        result = await callAI(selectedModel);
+      } catch (err: any) {
+        console.error(`AI Model ${selectedModel} failed:`, err.message);
+        
+        // Fallback chain: PRIMARY -> FAST
+        if (selectedModel === AI_MODELS.PRIMARY) {
+          console.warn(`Falling back to FAST model: ${AI_MODELS.FAST}`);
+          result = await callAI(AI_MODELS.FAST);
+        } else {
+          throw err; // Re-throw if the FAST model itself failed
+        }
+      }
+
+      const aiText = result.text;
+      const tokensUsed = result.usage?.total_tokens || Math.ceil((prompt.length + aiText.length) / 4);
+
+      // 4. Log Usage & Cache
+      db.prepare("INSERT INTO usage_logs (user_id, tokens_used, cost) VALUES (?, ?, ?)").run(userId, tokensUsed, 0);
+      db.prepare("INSERT OR IGNORE INTO ai_cache (prompt_hash, response) VALUES (?, ?)").run(promptHash, aiText);
+
+      return { text: aiText, cached: false, model: result.model, reasoningTokens: result.reasoningTokens };
     } catch (error: any) {
-      console.error("AI Generation Error:", error);
-      res.status(500).json({ error: "AI service temporarily unavailable." });
+      // Handle different error structures (Axios vs SDK)
+      const errorData = error.response?.data || error.data || error;
+      const status = error.response?.status || error.status || error.statusCode;
+      
+      console.error("AI Request Handler Error:", JSON.stringify(errorData, null, 2) || error.message);
+      
+      let userMessage = "AI service temporarily unavailable. Please try again later.";
+      
+      if (status === 401) {
+        userMessage = "Invalid AI API configuration. Please contact support.";
+      } else if (status === 403) {
+        userMessage = "AI service access forbidden. This may be due to environment restrictions or missing headers.";
+      } else if (status === 402) {
+        userMessage = "AI service quota exceeded. Please try again later.";
+      } else if (errorData?.error?.message) {
+        userMessage = `AI Error: ${errorData.error.message}`;
+      } else if (error.message) {
+        userMessage = `AI Error: ${error.message}`;
+      }
+      
+      throw new Error(userMessage);
+    }
+  };
+
+  app.post("/api/ai/generate", verifyFirebaseToken, aiLimiter, async (req: any, res: any) => {
+    let { prompt, systemInstruction, taskType } = req.body;
+    const user = req.user;
+
+    if (!prompt) return res.status(400).json({ error: "Prompt is required" });
+
+    // Strict Input Sanitization
+    prompt = validator.escape(String(prompt).substring(0, 2000));
+    systemInstruction = validator.escape(String(systemInstruction || "You are a helpful assistant.").substring(0, 1000));
+
+    try {
+      const result = await handle_ai_request(user, prompt, taskType, systemInstruction);
+      res.json(result);
+    } catch (error: any) {
+      res.status(error.message.includes("limit") ? 403 : 500).json({ error: error.message });
     }
   });
 
-  app.post("/api/usage/log", verifyFirebaseToken, (req: any, res) => {
+  // Usage logging is handled internally by AI generation endpoint
+  // Removed public usage logging endpoint to prevent database pollution exploits
+
+
+  app.get("/api/user/profile", verifyFirebaseToken, (req: any, res) => {
     const userId = req.user.id;
-    const { tokens = 0 } = req.body;
+    let profile = db.prepare("SELECT * FROM user_profiles WHERE user_id = ?").get(userId) as any;
     
-    try {
-      db.prepare("INSERT INTO usage_logs (user_id, tokens_used, cost) VALUES (?, ?, ?)").run(userId, tokens, 0);
-      res.json({ success: true });
-    } catch (error) {
-      console.error("Failed to log usage:", error);
-      res.status(500).json({ error: "Failed to log usage" });
+    if (!profile) {
+      db.prepare("INSERT INTO user_profiles (user_id) VALUES (?)").run(userId);
+      profile = db.prepare("SELECT * FROM user_profiles WHERE user_id = ?").get(userId);
     }
+    
+    res.json(profile);
+  });
+
+  app.post("/api/user/profile", verifyFirebaseToken, (req: any, res) => {
+    const userId = req.user.id;
+    const { morning_person_score, peak_energy_start, peak_energy_end, focus_duration_avg, daily_routine_json } = req.body;
+    
+    db.prepare(`
+      UPDATE user_profiles 
+      SET morning_person_score = ?, peak_energy_start = ?, peak_energy_end = ?, focus_duration_avg = ?, daily_routine_json = ?, last_updated = CURRENT_TIMESTAMP 
+      WHERE user_id = ?
+    `).run(morning_person_score, peak_energy_start, peak_energy_end, focus_duration_avg, daily_routine_json, userId);
+    
+    res.json({ success: true });
+  });
+
+  app.get("/api/goals", verifyFirebaseToken, (req: any, res) => {
+    const userId = req.user.id;
+    const goals = db.prepare("SELECT * FROM goals WHERE user_id = ? ORDER BY created_at DESC").all(userId);
+    res.json(goals);
+  });
+
+  app.post("/api/goals", verifyFirebaseToken, (req: any, res) => {
+    const userId = req.user.id;
+    const { title, description, type, target_date } = req.body;
+    
+    const stmt = db.prepare("INSERT INTO goals (user_id, title, description, type, target_date) VALUES (?, ?, ?, ?, ?)");
+    const info = stmt.run(userId, title, description, type || 'short-term', target_date);
+    
+    res.json({ id: info.lastInsertRowid, title, description, type, target_date });
+  });
+
+  app.post("/api/focus/start", verifyFirebaseToken, (req: any, res) => {
+    const userId = req.user.id;
+    const { task_id } = req.body;
+    
+    const stmt = db.prepare("INSERT INTO focus_sessions (user_id, task_id) VALUES (?, ?)");
+    const info = stmt.run(userId, task_id);
+    
+    res.json({ id: info.lastInsertRowid });
+  });
+
+  app.post("/api/focus/end", verifyFirebaseToken, (req: any, res) => {
+    const userId = req.user.id;
+    const { session_id, distractions_count, efficiency_score } = req.body;
+    
+    const session = db.prepare("SELECT * FROM focus_sessions WHERE id = ? AND user_id = ?").get(session_id, userId) as any;
+    if (!session) return res.status(404).json({ error: "Session not found" });
+    
+    const endTime = new Date();
+    const startTime = new Date(session.start_time);
+    const durationMinutes = Math.round((endTime.getTime() - startTime.getTime()) / (1000 * 60));
+    
+    db.prepare(`
+      UPDATE focus_sessions 
+      SET end_time = ?, duration_minutes = ?, distractions_count = ?, efficiency_score = ? 
+      WHERE id = ?
+    `).run(endTime.toISOString(), durationMinutes, distractions_count || 0, efficiency_score || 5, session_id);
+    
+    // Update user focus average
+    const avgFocus = db.prepare("SELECT AVG(duration_minutes) as avg FROM focus_sessions WHERE user_id = ? AND duration_minutes > 0").get(userId) as any;
+    if (avgFocus.avg) {
+      db.prepare("UPDATE user_profiles SET focus_duration_avg = ? WHERE user_id = ?").run(Math.round(avgFocus.avg), userId);
+    }
+    
+    res.json({ success: true, durationMinutes });
+  });
+
+  app.get("/api/ai/next-action", verifyFirebaseToken, async (req: any, res) => {
+    const userId = req.user.id;
+    const tasks = db.prepare("SELECT * FROM tasks WHERE user_id = ? AND status = 'pending'").all(userId) as any[];
+    const profile = db.prepare("SELECT * FROM user_profiles WHERE user_id = ?").get(userId) as any;
+    
+    if (tasks.length === 0) return res.json({ message: "No pending tasks. Time to set a new goal?" });
+    
+    const now = new Date();
+    const currentHour = now.getHours();
+    
+    // Decision Engine Logic
+    const scoredTasks = tasks.map(task => {
+      let score = (task.importance || 5) * 2 + (task.urgency_score || 5) * 1.5 + (task.impact_level || 5) * 2;
+      
+      // Energy Fit
+      if (profile) {
+        const peakStart = parseInt(profile.peak_energy_start.split(':')[0]);
+        const peakEnd = parseInt(profile.peak_energy_end.split(':')[0]);
+        const isPeak = currentHour >= peakStart && currentHour <= peakEnd;
+        
+        if (isPeak && task.estimated_effort >= 4) score += 10; // High effort during peak
+        if (!isPeak && task.estimated_effort <= 2) score += 5; // Low effort during off-peak
+      }
+      
+      // Deadline pressure
+      if (task.deadline) {
+        const deadline = new Date(task.deadline);
+        const hoursLeft = (deadline.getTime() - now.getTime()) / (1000 * 3600);
+        if (hoursLeft < 24) score += 20;
+        if (hoursLeft < 4) score += 50;
+      }
+      
+      return { ...task, score };
+    });
+    
+    const nextAction = scoredTasks.sort((a, b) => b.score - a.score)[0];
+    
+    res.json(nextAction);
+  });
+
+  app.get("/api/ai/insights", verifyFirebaseToken, (req: any, res) => {
+    const userId = req.user.id;
+    const insights = db.prepare("SELECT * FROM ai_insights WHERE user_id = ? ORDER BY created_at DESC LIMIT 5").all(userId);
+    res.json(insights);
   });
 
   app.get("/api/usage/status", verifyFirebaseToken, (req: any, res) => {
@@ -430,21 +785,37 @@ async function startServer() {
   app.post("/api/payments/create-payment", verifyFirebaseToken, (req, res) => res.redirect(307, "/api/payments/create-order"));
   app.post("/api/payments/verify-payment", verifyFirebaseToken, (req, res) => res.redirect(307, "/api/payments/verify"));
 
-  app.post("/api/payments/verify", verifyFirebaseToken, async (req: any, res) => {
+  app.post("/api/payments/verify", verifyFirebaseToken, async (req: any, res: any) => {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
     const userId = req.user.id;
 
-    const crypto = await import("crypto");
-    const hmac = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET || 'dummy_secret');
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({ error: "Missing payment verification details" });
+    }
+
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) {
+      console.error("CRITICAL: RAZORPAY_KEY_SECRET is not set!");
+      return res.status(500).json({ error: "Server configuration error" });
+    }
+
+    // Server-Side Verification: Confirm payment signature
+    const hmac = crypto.createHmac("sha256", secret);
     hmac.update(razorpay_order_id + "|" + razorpay_payment_id);
     const generated_signature = hmac.digest("hex");
 
     if (generated_signature === razorpay_signature) {
-      db.prepare("UPDATE payments SET razorpay_payment_id = ?, status = 'captured' WHERE razorpay_order_id = ?").run(razorpay_payment_id, razorpay_order_id);
-      db.prepare("UPDATE users SET subscription_plan = 'premium' WHERE id = ?").run(userId);
-      res.json({ success: true, message: "Payment verified and plan upgraded" });
+      // Update subscription ONLY after verified payment
+      db.transaction(() => {
+        db.prepare("UPDATE payments SET razorpay_payment_id = ?, status = 'captured' WHERE razorpay_order_id = ?").run(razorpay_payment_id, razorpay_order_id);
+        db.prepare("UPDATE users SET subscription_plan = 'premium' WHERE id = ?").run(userId);
+      })();
+      
+      console.log(`Payment verified for user ${userId}: ${razorpay_payment_id}`);
+      res.json({ success: true, message: "Subscription upgraded successfully" });
     } else {
-      res.status(400).json({ error: "Invalid signature" });
+      console.warn(`SUSPICIOUS: Invalid payment signature attempt for user ${userId}`);
+      res.status(400).json({ error: "Payment verification failed" });
     }
   });
 
@@ -472,23 +843,27 @@ async function startServer() {
 
   // API Endpoints
   app.post("/api/tasks", verifyFirebaseToken, (req: any, res) => {
-    const { title, importance, duration, is_habit, deadline, category } = req.body;
+    let { title, importance, urgency_score, estimated_effort, impact_level, duration, is_habit, deadline, category } = req.body;
     const userId = req.user.id;
+
+    // Strict Input Sanitization
+    if (title) title = validator.escape(validator.trim(String(title)));
+    if (category) category = validator.escape(validator.trim(String(category)));
 
     // Plan check: Free users can only have 10 tasks
     const user = db.prepare("SELECT subscription_plan FROM users WHERE id = ?").get(userId) as any;
     if (user.subscription_plan === 'trial') {
       const count = db.prepare("SELECT COUNT(*) as count FROM tasks WHERE user_id = ? AND status = 'pending'").get(userId) as any;
       if (count.count >= 10) {
-        return res.status(403).json({ error: "Trial users are limited to 10 pending tasks. Upgrade to Premium for unlimited tasks!" });
+        return res.status(403).json({ error: "Trial limit reached (10 tasks)." });
       }
     }
 
     if (!title || typeof importance !== 'number' || typeof duration !== 'number') {
-      return res.status(400).json({ error: "Missing or invalid required fields" });
+      return res.status(400).json({ error: "Invalid task data" });
     }
     if (title.length > 200) {
-      return res.status(400).json({ error: "Title is too long (max 200 characters)" });
+      return res.status(400).json({ error: "Title too long" });
     }
     if (category && category.length > 50) {
       return res.status(400).json({ error: "Category is too long (max 50 characters)" });
@@ -500,14 +875,14 @@ async function startServer() {
       return res.status(400).json({ error: "Duration must be greater than 0" });
     }
 
-    const stmt = db.prepare("INSERT INTO tasks (user_id, title, importance, duration, is_habit, deadline, category) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    const info = stmt.run(userId, title, importance, duration, is_habit ? 1 : 0, deadline || null, category || 'general');
-    res.json({ id: info.lastInsertRowid, title, importance, duration, is_habit, deadline, category, status: "pending" });
+    const stmt = db.prepare("INSERT INTO tasks (user_id, title, importance, urgency_score, estimated_effort, impact_level, duration, is_habit, deadline, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const info = stmt.run(userId, title, importance, urgency_score || 5, estimated_effort || 3, impact_level || 5, duration, is_habit ? 1 : 0, deadline || null, category || 'general');
+    res.json({ id: info.lastInsertRowid, title, importance, urgency_score, estimated_effort, impact_level, duration, is_habit, deadline, category, status: "pending" });
   });
 
   app.put("/api/tasks/:id", verifyFirebaseToken, (req: any, res) => {
     const { id } = req.params;
-    const { title, importance, duration, is_habit, deadline, category } = req.body;
+    const { title, importance, urgency_score, estimated_effort, impact_level, duration, is_habit, deadline, category } = req.body;
     const userId = req.user.id;
     
     const task = db.prepare("SELECT * FROM tasks WHERE id = ? AND user_id = ?").get(id, userId);
@@ -529,8 +904,8 @@ async function startServer() {
       return res.status(400).json({ error: "Duration must be greater than 0" });
     }
 
-    const stmt = db.prepare("UPDATE tasks SET title = ?, importance = ?, duration = ?, is_habit = ?, deadline = ?, category = ? WHERE id = ? AND user_id = ?");
-    stmt.run(title, importance, duration, is_habit ? 1 : 0, deadline || null, category || 'general', id, userId);
+    const stmt = db.prepare("UPDATE tasks SET title = ?, importance = ?, urgency_score = ?, estimated_effort = ?, impact_level = ?, duration = ?, is_habit = ?, deadline = ?, category = ? WHERE id = ? AND user_id = ?");
+    stmt.run(title, importance, urgency_score || 5, estimated_effort || 3, impact_level || 5, duration, is_habit ? 1 : 0, deadline || null, category || 'general', id, userId);
     res.json({ success: true });
   });
 
@@ -861,8 +1236,23 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  }).on('error', (err: any) => {
+    console.error("Server failed to start (listen error):", err);
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use.`);
+    }
   });
 }
 
-startServer();
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception thrown:', err);
+});
+
+startServer().catch(err => {
+  console.error("Critical error in startServer execution:", err);
+});

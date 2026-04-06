@@ -8,6 +8,7 @@
         "firebase_uid": { "type": "string" },
         "email": { "type": "string", "format": "email" },
         "subscription_plan": { "type": "string", "enum": ["trial", "premium"] },
+        "role": { "type": "string", "enum": ["admin", "user"] },
         "trial_used": { "type": "integer" },
         "created_at": { "type": "string", "format": "date-time" }
       },

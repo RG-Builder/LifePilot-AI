@@ -27,7 +27,31 @@ import {
   CreditCard,
   Shield,
   FileText,
-  Edit3
+  Edit3,
+  Tag,
+  Check,
+  Target,
+  Moon,
+  Mic,
+  Heart,
+  Briefcase,
+  LayoutGrid,
+  Activity,
+  Cpu,
+  Layers,
+  Fingerprint,
+  ChevronLeft,
+  ShieldCheck,
+  Gauge,
+  Dna,
+  Timer,
+  User as UserIcon,
+  Settings as SettingsIcon,
+  Sun,
+  Utensils,
+  CheckCircle,
+  Rocket,
+  Dumbbell
 } from 'lucide-react';
 import { PrivacyPolicy, TermsOfService } from './components/Legal';
 import { motion, AnimatePresence } from 'motion/react';
@@ -56,11 +80,16 @@ import {
   signOut
 } from 'firebase/auth';
 import { doc, getDocFromServer } from 'firebase/firestore';
+import { useTheme, ThemeType } from './theme';
 
-interface Task {
+interface Mission {
   id: number;
   title: string;
-  importance: number;
+  impact: 'low' | 'moderate' | 'high' | 'critical';
+  urgency: number;
+  urgency_score?: number;
+  estimated_effort?: number;
+  impact_level?: number;
   duration: number;
   deadline?: string;
   is_habit: boolean;
@@ -70,6 +99,14 @@ interface Task {
   startTime?: string;
   endTime?: string;
   isOverdue?: boolean;
+}
+
+interface LifeState {
+  score: number;
+  status: 'Focused' | 'Distracted' | 'Peak' | 'Low Energy' | 'Recovering';
+  insight: string;
+  focusLevel: number;
+  hydration: number;
 }
 
 interface User {
@@ -188,18 +225,18 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
 
       return (
         <div className="min-h-screen bg-bg-primary flex items-center justify-center p-6 text-center">
-          <div className="glass-card p-10 max-w-md space-y-6 border-accent-urgent/20">
-            <div className="size-20 bg-accent-urgent/10 rounded-full flex items-center justify-center text-accent-urgent mx-auto">
+          <div className="stitch-card p-10 max-w-md space-y-6 border-accent-red/20">
+            <div className="size-20 bg-accent-red/10 rounded-full flex items-center justify-center text-accent-red mx-auto">
               <AlertCircle size={40} />
             </div>
-            <h2 className="text-2xl font-bold">Unexpected Error</h2>
-            <p className="text-slate-400">{displayMessage}</p>
+            <h2 className="text-2xl font-black tracking-tighter">System Error</h2>
+            <p className="text-slate-400 font-medium">{displayMessage}</p>
             <div className="pt-4 space-y-4">
               <button 
                 onClick={() => window.location.reload()}
-                className="w-full py-4 bg-primary text-white rounded-2xl font-bold shadow-lg glow-primary"
+                className="w-full py-4 bg-accent-red text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-accent-red/20 hover:brightness-110 transition-all"
               >
-                Refresh Page
+                Re-Initialize System
               </button>
               <p className="text-xs text-slate-500">
                 If the problem persists, contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary">{SUPPORT_EMAIL}</a>
@@ -215,8 +252,10 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
 }
 
 export default function App() {
+  const { theme, setTheme } = useTheme();
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('lifepilot_token'));
+  const [isAuthReady, setIsAuthReady] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authEmail, setAuthEmail] = useState('');
@@ -224,11 +263,23 @@ export default function App() {
   const [showPricing, setShowPricing] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
 
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [habits, setHabits] = useState<Habit[]>([]);
+  const [missions, setMissions] = useState<Mission[]>([]);
+  const [nextAction, setNextAction] = useState<Mission | null>(null);
+  const [focusTask, setFocusTask] = useState<Mission | null>(null);
+  const [aiInsights, setAiInsights] = useState<any[]>([]);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [goals, setGoals] = useState<any[]>([]);
+  const [consistencySystem, setConsistencySystem] = useState<Habit[]>([]);
+  const [timelineMatrix, setTimelineMatrix] = useState<Mission[]>([]);
+  const [selfAwareness, setSelfAwareness] = useState<Analytics | null>(null);
+  const [lifeState, setLifeState] = useState<LifeState>({
+    score: 84,
+    status: 'Peak',
+    insight: 'Biometric Peak is arriving. Deep Work is optimal for the next 90 minutes.',
+    focusLevel: 88,
+    hydration: 1450
+  });
   const [habitStats, setHabitStats] = useState<HabitStat[]>([]);
-  const [schedule, setSchedule] = useState<Task[]>([]);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
   const getFreshToken = async () => {
     if (!auth.currentUser) return null;
@@ -283,12 +334,16 @@ export default function App() {
     return res;
   };
 
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingMission, setEditingMission] = useState<Mission | null>(null);
   
   const [title, setTitle] = useState('');
-  const [importance, setImportance] = useState(5);
+  const [impact, setImpact] = useState<'low' | 'moderate' | 'high' | 'critical'>('moderate');
+  const [urgencyScore, setUrgencyScore] = useState(5);
+  const [estimatedEffort, setEstimatedEffort] = useState(3);
+  const [impactLevel, setImpactLevel] = useState(5);
   const [duration, setDuration] = useState(30);
   const [deadline, setDeadline] = useState('');
+  const [deadlineError, setDeadlineError] = useState<string | null>(null);
   const [isHabit, setIsHabit] = useState(false);
   const [category, setCategory] = useState('general');
   
@@ -298,6 +353,8 @@ export default function App() {
   const [habitFreq, setHabitFreq] = useState<'daily' | 'weekly'>('daily');
   const [habitGoal, setHabitGoal] = useState(1);
   const [showHabitModal, setShowHabitModal] = useState(false);
+  const [showAiScheduleModal, setShowAiScheduleModal] = useState(false);
+  const [aiScheduleContent, setAiScheduleContent] = useState('');
   const [editingHabit, setEditingHabit] = useState<Habit | null>(null);
   
   const [loading, setLoading] = useState(false);
@@ -327,8 +384,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (token) fetchUsage();
-  }, [token]);
+    if (isAuthReady && token) fetchUsage();
+  }, [token, isAuthReady]);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [motivationQuote, setMotivationQuote] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'tasks' | 'schedule' | 'habits' | 'analytics' | 'settings'>('home');
@@ -344,16 +401,530 @@ export default function App() {
   const [lastAiCall, setLastAiCall] = useState(0);
   const [showAiPanel, setShowAiPanel] = useState(false);
 
-  useEffect(() => {
-    logEvent('tab_view', { tab_id: activeTab });
-  }, [activeTab]);
+  const renderOnboarding = () => {
+    if (theme.id === 'simple') {
+      return (
+        <div className="fixed inset-0 z-[200] bg-white flex flex-col font-sans overflow-y-auto no-scrollbar">
+          {/* Header */}
+          <div className="p-6 flex items-center justify-between border-b border-gray-100 sticky top-0 bg-white/80 backdrop-blur-md z-20">
+            <button onClick={() => setOnboardingStep(Math.max(1, onboardingStep - 1))} className="text-gray-400 hover:text-gray-600">
+              <ChevronLeft size={24} />
+            </button>
+            <div className="flex-1 mx-8 h-3 bg-gray-100 rounded-full overflow-hidden relative">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${(onboardingStep / 4) * 100}%` }}
+                className="h-full bg-primary rounded-full"
+              />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <Rocket size={14} className="text-primary" />
+              </div>
+            </div>
+            <button onClick={() => completeOnboarding()} className="text-gray-300 hover:text-gray-500">
+              <X size={24} />
+            </button>
+          </div>
+
+          <div className="flex-1 p-6 flex flex-col items-center">
+            <AnimatePresence mode="wait">
+              {onboardingStep === 1 && (
+                <motion.div 
+                  key="simple-step1"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="w-full max-w-md space-y-8"
+                >
+                  <div className="space-y-4">
+                    <h2 className="text-3xl font-extrabold text-gray-800 leading-tight">
+                      What's your main <span className="text-primary italic">mission?</span>
+                    </h2>
+                    <p className="text-gray-500 font-semibold">Choose the focus area where you want LifePilot AI to help you excel this week.</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {[
+                      { id: 'focus', title: 'Deep Focus', desc: 'Eliminate distractions and crush your big projects.', icon: <Target className="text-blue-500" />, bg: 'bg-blue-50' },
+                      { id: 'habits', title: 'Healthy Habits', desc: 'Consistency is key. Build routines that actually stick.', icon: <Dumbbell className="text-primary" />, bg: 'bg-green-50' },
+                      { id: 'sleep', title: 'Better Sleep', desc: 'Optimize your wind-down and wake up fully energized.', icon: <Moon className="text-yellow-500" />, bg: 'bg-yellow-50' },
+                      { id: 'time', title: 'More Free Time', desc: 'Automate the boring stuff to focus on what you love.', icon: <Clock className="text-purple-500" />, bg: 'bg-purple-50' }
+                    ].map(item => (
+                      <button 
+                        key={item.id}
+                        onClick={() => setOnboardingStep(2)}
+                        className="w-full p-6 bg-white border-2 border-gray-100 rounded-[24px] flex items-center gap-6 text-left hover:border-primary hover:bg-green-50/30 transition-all group active:scale-[0.98]"
+                      >
+                        <div className={`size-14 rounded-2xl ${item.bg} flex items-center justify-center group-hover:scale-110 transition-transform`}>
+                          {item.icon}
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-xl font-extrabold text-gray-800">{item.title}</h4>
+                          <p className="text-sm text-gray-500 font-medium">{item.desc}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+
+              {onboardingStep === 2 && (
+                <motion.div 
+                  key="simple-step2"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  className="w-full max-w-md space-y-8"
+                >
+                  <div className="text-center space-y-4">
+                    <div className="inline-block px-4 py-1 bg-yellow-400 text-white text-[10px] font-black uppercase tracking-widest rounded-full transform -rotate-2">Calibration</div>
+                    <h2 className="text-3xl font-extrabold text-gray-800 leading-tight">Let's set your flight plan</h2>
+                    <p className="text-gray-500 font-semibold">Your pilot adapts to your natural rhythm. Tell us when you start and end your day.</p>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div className="p-8 bg-gray-50 rounded-[32px] border-2 border-gray-100 space-y-6 relative overflow-hidden">
+                      <div className="absolute top-4 right-4 text-gray-200"><Sun size={64} /></div>
+                      <div className="flex items-center gap-4 relative z-10">
+                        <div className="size-12 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20">
+                          <Sun size={24} />
+                        </div>
+                        <div>
+                          <h4 className="text-lg font-extrabold text-gray-800">Wake Up Time</h4>
+                          <p className="text-xs text-gray-400 font-bold uppercase">Early Bird</p>
+                        </div>
+                      </div>
+                      <div className="flex justify-center items-center gap-4 bg-white p-6 rounded-2xl border-2 border-gray-100">
+                        <div className="text-5xl font-black text-gray-800">06:30</div>
+                        <div className="flex flex-col gap-2">
+                          <button className="px-4 py-1 bg-primary text-white text-xs font-black rounded-lg">AM</button>
+                          <button className="px-4 py-1 bg-gray-100 text-gray-400 text-xs font-black rounded-lg">PM</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-8 bg-gray-50 rounded-[32px] border-2 border-gray-100 space-y-6 relative overflow-hidden">
+                      <div className="absolute top-4 right-4 text-gray-200"><Moon size={64} /></div>
+                      <div className="flex items-center gap-4 relative z-10">
+                        <div className="size-12 bg-blue-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                          <Moon size={24} />
+                        </div>
+                        <div>
+                          <h4 className="text-lg font-extrabold text-gray-800">Bedtime</h4>
+                          <p className="text-xs text-gray-400 font-bold uppercase">Night Owl</p>
+                        </div>
+                      </div>
+                      <div className="flex justify-center items-center gap-4 bg-white p-6 rounded-2xl border-2 border-gray-100">
+                        <div className="text-5xl font-black text-gray-800">10:45</div>
+                        <div className="flex flex-col gap-2">
+                          <button className="px-4 py-1 bg-gray-100 text-gray-400 text-xs font-black rounded-lg">AM</button>
+                          <button className="px-4 py-1 bg-blue-500 text-white text-xs font-black rounded-lg">PM</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {onboardingStep === 3 && (
+                <motion.div 
+                  key="simple-step3"
+                  initial={{ opacity: 0, scale: 0.95 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 1.05 }}
+                  className="w-full max-w-md space-y-12 flex flex-col items-center py-12"
+                >
+                  <div className="relative size-48">
+                    <div className="absolute inset-0 bg-primary/10 rounded-full animate-ping"></div>
+                    <div className="relative size-48 bg-primary rounded-full flex items-center justify-center text-white shadow-2xl shadow-primary/40">
+                      <Sparkles size={64} />
+                    </div>
+                  </div>
+
+                  <div className="text-center space-y-4">
+                    <h2 className="text-4xl font-black text-gray-800">Building your perfect day...</h2>
+                    <p className="text-gray-500 font-semibold">Our AI is orchestrating your habits, goals, and breaks into a seamless flow.</p>
+                  </div>
+
+                  <div className="w-full space-y-4">
+                    <div className="h-4 bg-gray-100 rounded-full overflow-hidden relative">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: '85%' }}
+                        transition={{ duration: 2 }}
+                        className="h-full bg-primary"
+                      />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Footer */}
+          <div className="p-6 bg-white border-t border-gray-100 sticky bottom-0">
+            <div className="max-w-md mx-auto flex gap-4">
+              <button 
+                onClick={() => setOnboardingStep(Math.max(1, onboardingStep - 1))}
+                className="px-6 py-4 bg-white border-2 border-gray-200 rounded-2xl text-gray-400 font-black uppercase tracking-widest hover:bg-gray-50 active:scale-95 transition-all"
+              >
+                Back
+              </button>
+              <button 
+                onClick={() => {
+                  if (onboardingStep < 3) setOnboardingStep(onboardingStep + 1);
+                  else completeOnboarding();
+                }}
+                className="flex-1 py-4 bg-primary text-white rounded-2xl font-black uppercase tracking-widest shadow-[0_4px_0_rgb(60,140,0)] hover:brightness-110 active:translate-y-[2px] active:shadow-[0_2px_0_rgb(60,140,0)] transition-all flex items-center justify-center gap-3"
+              >
+                {onboardingStep === 3 ? 'Show me my day!' : 'Continue'}
+                <ArrowRight size={20} />
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Elite AI Onboarding (Original)
+    return (
+      <div className="fixed inset-0 z-[200] bg-bg-dark flex flex-col grid-background overflow-y-auto no-scrollbar">
+        {/* Onboarding Header */}
+        <div className="flex items-center justify-between p-8 sticky top-0 bg-bg-dark/80 backdrop-blur-xl z-20 border-b border-white/5">
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => completeOnboarding()}
+              className="size-10 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 transition-all"
+            >
+              <X size={20} />
+            </button>
+            <div className="flex flex-col">
+              <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary">Calibration Sequence</span>
+            </div>
+          </div>
+          <div className="bg-white/5 px-4 py-1.5 rounded-full border border-white/10">
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Step 0{onboardingStep}</span>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-12">
+          <div className="max-w-2xl w-full">
+            <AnimatePresence mode="wait">
+              {onboardingStep === 1 && (
+                <motion.div 
+                  key="step1"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-8 sm:space-y-12"
+                >
+                  <div className="text-center space-y-4">
+                    <h2 className="text-4xl sm:text-7xl font-black tracking-tighter text-white leading-none">LIFE <span className="text-primary">PILOT</span></h2>
+                    <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em]">Your High-Performance Digital Partner</p>
+                  </div>
+
+                  <div className="relative group">
+                    <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 via-accent-purple/20 to-accent-blue/20 rounded-[48px] blur-xl opacity-50 group-hover:opacity-100 transition-all duration-1000"></div>
+                    <div className="relative stitch-card p-6 sm:p-12 border-white/10 flex flex-col items-center gap-8">
+                      <div className="absolute top-6 right-8 text-right hidden sm:block">
+                        <div className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-1">Core Status</div>
+                        <div className="text-[10px] font-black text-primary uppercase tracking-widest">Stable // 98.4%</div>
+                      </div>
+                      
+                      <div className="size-32 sm:size-48 rounded-[32px] sm:rounded-[40px] bg-white/[0.02] border border-white/10 flex items-center justify-center relative overflow-hidden shadow-inner">
+                        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent"></div>
+                        <div className="relative z-10 size-16 sm:size-24 bg-primary/10 rounded-2xl sm:rounded-3xl flex items-center justify-center text-primary border border-primary/20 shadow-2xl">
+                          <Brain size={32} className="sm:size-[48px] animate-pulse-subtle" />
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 h-1 bg-primary/20">
+                          <div className="h-full bg-primary w-2/3 animate-pulse"></div>
+                        </div>
+                      </div>
+
+                      <div className="text-center space-y-2">
+                        <div className="text-[10px] font-black text-accent-purple uppercase tracking-widest">Neural Sync</div>
+                        <div className="text-xs font-black text-white uppercase tracking-[0.2em]">READY_FOR_BOOT</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                    <div className="stitch-card p-6 sm:p-8 border-white/5 space-y-4 hover:border-primary/20 transition-all group">
+                      <div className="size-10 sm:size-12 rounded-xl sm:rounded-2xl bg-primary/10 flex items-center justify-center text-primary group-hover:scale-110 transition-transform">
+                        <Sparkles size={20} className="sm:size-[24px]" />
+                      </div>
+                      <div className="space-y-2">
+                        <h4 className="text-xs sm:text-sm font-black uppercase tracking-widest text-white">Autonomous Optimization</h4>
+                        <p className="text-[10px] sm:text-xs text-slate-500 leading-relaxed">Dynamic scheduling that adapts to your physiological performance peaks.</p>
+                      </div>
+                    </div>
+                    <div className="stitch-card p-6 sm:p-8 border-white/5 space-y-4 hover:border-accent-purple/20 transition-all group">
+                      <div className="size-10 sm:size-12 rounded-xl sm:rounded-2xl bg-accent-purple/10 flex items-center justify-center text-accent-purple group-hover:scale-110 transition-transform">
+                        <Fingerprint size={20} className="sm:size-[24px]" />
+                      </div>
+                      <div className="space-y-2">
+                        <h4 className="text-xs sm:text-sm font-black uppercase tracking-widest text-white">Biometric Integration</h4>
+                        <p className="text-[10px] sm:text-xs text-slate-500 leading-relaxed">Seamlessly bridges with your wearables for real-time life-state mapping.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-4 sm:pt-8">
+                    <button 
+                      onClick={() => setOnboardingStep(2)}
+                      className="flex-1 py-6 sm:py-8 bg-primary text-bg-dark rounded-2xl sm:rounded-[24px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-4 shadow-2xl shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all group text-sm sm:text-base"
+                    >
+                      Begin Calibration
+                      <ArrowRight size={20} className="sm:size-[24px] group-hover:translate-x-2 transition-transform" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+              
+              {onboardingStep === 2 && (
+                <motion.div 
+                  key="step2"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-8 sm:space-y-12"
+                >
+                  <div className="space-y-4">
+                    <h2 className="text-4xl sm:text-7xl font-black tracking-tighter text-white leading-none">SET <br/><span className="text-primary">DIRECTIVES</span></h2>
+                    <p className="text-slate-400 font-medium text-sm sm:text-lg max-w-lg">Define the operational parameters for your LifePilot AI. These goals will calibrate your cognitive environment and mission prioritizations.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 sm:gap-4">
+                    {[
+                      { id: 'focus', title: 'Peak Focus', desc: 'Eliminate peripheral noise. High-intensity cognitive output with automated distraction suppression.', icon: <Target size={20} />, color: 'text-primary' },
+                      { id: 'mastery', title: 'Calm Mastery', desc: 'Maintain equilibrium. Managed stress levels and sustainable productivity flow.', icon: <Moon size={20} />, color: 'text-accent-blue' },
+                      { id: 'creative', title: 'Creative Velocity', desc: 'Maximize lateral thinking. AI-assisted ideation and high-output synthesis.', icon: <Sparkles size={20} />, color: 'text-accent-purple' },
+                      { id: 'physical', title: 'Physical Peak', desc: 'Bio-optimization. Integration with somatic data for peak physiological performance.', icon: <Activity size={20} />, color: 'text-accent-red' }
+                    ].map(directive => (
+                      <button 
+                        key={directive.id}
+                        onClick={() => setOnboardingStep(3)}
+                        className="stitch-card p-5 sm:p-8 border-white/5 hover:border-white/20 hover:bg-white/[0.04] transition-all text-left flex items-start gap-4 sm:gap-6 group relative overflow-hidden"
+                      >
+                        <div className={`size-10 sm:size-14 rounded-xl sm:rounded-2xl bg-white/5 flex items-center justify-center ${directive.color} group-hover:scale-110 transition-transform shrink-0`}>
+                          {directive.icon}
+                        </div>
+                        <div className="space-y-1 sm:space-y-2 flex-1">
+                          <h4 className={`text-lg sm:text-2xl font-black tracking-tight ${directive.color}`}>{directive.title}</h4>
+                          <p className="text-slate-500 text-[10px] sm:text-sm leading-relaxed font-medium">{directive.desc}</p>
+                        </div>
+                        <div className="absolute top-4 right-4 size-1.5 sm:size-2 bg-primary rounded-full opacity-0 group-hover:opacity-100 shadow-[0_0_10px_rgba(0,242,255,1)] transition-all"></div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="space-y-4 sm:space-y-6 pt-4 sm:pt-8">
+                    <div className="text-center space-y-1 sm:space-y-2">
+                      <div className="text-[8px] sm:text-[10px] font-black text-slate-500 uppercase tracking-widest">Calibration Load</div>
+                      <div className="text-2xl sm:text-4xl font-black text-white">84%</div>
+                    </div>
+                    <div className="h-1.5 sm:h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: '84%' }}
+                        className="h-full bg-primary shadow-[0_0_15px_rgba(0,242,255,0.5)]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap justify-center gap-6 sm:gap-12 pt-2 sm:pt-4">
+                    <div className="flex items-center gap-2">
+                      <div className="size-1 bg-primary rounded-full animate-pulse"></div>
+                      <span className="text-[7px] sm:text-[8px] font-black text-slate-500 uppercase tracking-widest">Neural Link Active</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="size-1 bg-accent-purple rounded-full"></div>
+                      <span className="text-[7px] sm:text-[8px] font-black text-slate-500 uppercase tracking-widest">Latency 14ms</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="size-1 bg-accent-teal rounded-full"></div>
+                      <span className="text-[7px] sm:text-[8px] font-black text-slate-500 uppercase tracking-widest">Encryption: Quantum</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-4 sm:pt-8">
+                    <button 
+                      onClick={() => setOnboardingStep(1)}
+                      className="size-14 sm:size-20 bg-white/5 border border-white/10 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                    >
+                      <ChevronLeft size={20} className="sm:size-[24px]" />
+                    </button>
+                    <button 
+                      onClick={() => setOnboardingStep(3)}
+                      className="flex-1 py-4 sm:py-6 bg-primary text-bg-dark rounded-xl sm:rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:brightness-110 transition-all flex items-center justify-center gap-3 text-sm sm:text-base"
+                    >
+                      <ArrowRight size={20} className="sm:size-[24px]" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
+              {onboardingStep === 3 && (
+                <motion.div 
+                  key="step3"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-8 sm:space-y-12"
+                >
+                  <div className="text-center space-y-4">
+                    <p className="text-primary text-[8px] sm:text-[10px] font-black uppercase tracking-[0.4em]">Core Processing</p>
+                    <h2 className="text-4xl sm:text-7xl font-black tracking-tighter text-white leading-none">SYSTEM <br/>SYNTHESIS</h2>
+                  </div>
+
+                  <div className="flex justify-center py-6 sm:py-12">
+                    <div className="relative size-48 sm:size-64 flex items-center justify-center">
+                      <svg className="absolute inset-0 size-full -rotate-90">
+                        <circle 
+                          cx="96" cy="96" r="88" 
+                          className="sm:hidden text-white/5"
+                          fill="none" stroke="currentColor" strokeWidth="4" 
+                        />
+                        <circle 
+                          cx="128" cy="128" r="120" 
+                          className="hidden sm:block text-white/5"
+                          fill="none" stroke="currentColor" strokeWidth="4" 
+                        />
+                        <motion.circle 
+                          cx="96" cy="96" r="88" 
+                          fill="none" stroke="currentColor" strokeWidth="4" 
+                          strokeDasharray="553"
+                          initial={{ strokeDashoffset: 553 }}
+                          animate={{ strokeDashoffset: 553 * (1 - 0.84) }}
+                          className="sm:hidden text-primary"
+                          strokeLinecap="round"
+                        />
+                        <motion.circle 
+                          cx="128" cy="128" r="120" 
+                          fill="none" stroke="currentColor" strokeWidth="4" 
+                          strokeDasharray="754"
+                          initial={{ strokeDashoffset: 754 }}
+                          animate={{ strokeDashoffset: 754 * (1 - 0.84) }}
+                          className="hidden sm:block text-primary"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                      <div className="text-center space-y-1">
+                        <div className="text-4xl sm:text-6xl font-black tracking-tighter text-white">84%</div>
+                        <div className="text-[8px] sm:text-[10px] font-black text-slate-500 uppercase tracking-widest">Integrity</div>
+                      </div>
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 size-1.5 sm:size-2 bg-primary rounded-full shadow-[0_0_10px_rgba(0,242,255,1)]"></div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 sm:space-y-6">
+                    {[
+                      { label: 'Neural Link', status: 'Analyzing focus peaks across circadian rhythms...', progress: 65, color: 'bg-primary' },
+                      { label: 'Architect', status: 'Architecting mission matrix for maximum output...', progress: 100, color: 'bg-accent-purple' },
+                      { label: 'Sync', status: 'Synchronizing life-pilot protocols to biological baseline...', progress: 45, color: 'bg-slate-700' }
+                    ].map(proc => (
+                      <div key={proc.label} className="stitch-card p-5 sm:p-6 border-white/5 space-y-3 sm:space-y-4">
+                        <div className="flex items-center gap-3">
+                          <div className={`size-1.5 sm:size-2 rounded-full ${proc.color}`}></div>
+                          <span className="text-[8px] sm:text-[10px] font-black uppercase tracking-widest text-white">{proc.label}</span>
+                        </div>
+                        <p className="text-[10px] sm:text-xs font-medium text-slate-400">{proc.status}</p>
+                        <div className="h-1 sm:h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${proc.progress}%` }}
+                            className={`h-full ${proc.color}`}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex gap-4 pt-4 sm:pt-8">
+                    <button 
+                      onClick={() => setOnboardingStep(2)}
+                      className="size-14 sm:size-20 bg-white/5 border border-white/10 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                    >
+                      <ChevronLeft size={20} className="sm:size-[24px]" />
+                    </button>
+                    <div className="flex-1 flex flex-col items-center justify-center gap-1.5 sm:gap-2">
+                      <div className="h-1 w-24 sm:w-32 bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-full bg-primary w-[84%]"></div>
+                      </div>
+                      <span className="text-[8px] sm:text-[10px] font-black text-slate-500 uppercase tracking-widest">84% Compiled</span>
+                    </div>
+                    <button 
+                      onClick={() => setOnboardingStep(4)}
+                      className="size-14 sm:size-20 bg-primary text-bg-dark rounded-xl sm:rounded-2xl flex items-center justify-center shadow-xl shadow-primary/20 hover:brightness-110 transition-all"
+                    >
+                      <ArrowRight size={20} className="sm:size-[24px]" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+
+              {onboardingStep === 4 && (
+                <motion.div 
+                  key="step4"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-8 sm:space-y-12"
+                >
+                  <div className="space-y-4">
+                    <h2 className="text-4xl sm:text-7xl font-black tracking-tighter text-white leading-none">CALIBRATE <br/><span className="text-primary">ROUTINE</span></h2>
+                    <p className="text-primary text-[8px] sm:text-[10px] font-black uppercase tracking-[0.4em]">Protocol 8.4: Chronotype Alignment</p>
+                  </div>
+
+                  <div className="stitch-card p-6 sm:p-12 border-white/5 flex flex-col items-center gap-6 sm:gap-8 relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none"></div>
+                    <div className="text-[8px] sm:text-[10px] font-black text-slate-500 uppercase tracking-widest">Primary Awakening</div>
+                    <div className="flex items-baseline gap-1 sm:gap-2">
+                      <span className="text-5xl sm:text-8xl font-black tracking-tighter text-white">06:45</span>
+                      <span className="text-lg sm:text-2xl font-black text-slate-500 uppercase">AM</span>
+                    </div>
+                    <div className="relative size-48 sm:size-64 group cursor-pointer">
+                      <div className="absolute inset-0 border border-white/5 rounded-[32px] sm:rounded-[48px] rotate-45"></div>
+                      <div className="absolute inset-3 sm:inset-4 border border-white/10 rounded-[28px] sm:rounded-[40px] rotate-45"></div>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 sm:gap-4">
+                        <div className="size-12 sm:size-16 rounded-xl sm:rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-lg shadow-primary/20">
+                          <Sparkles size={24} className="sm:size-[32px]" />
+                        </div>
+                        <div className="text-[8px] sm:text-[10px] font-black text-white uppercase tracking-widest">Set Wake Time</div>
+                      </div>
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 size-3 sm:size-4 bg-primary rounded-full shadow-[0_0_15px_rgba(0,242,255,1)] border-2 sm:border-4 border-bg-dark"></div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 pt-4 sm:pt-8">
+                    <button 
+                      onClick={() => setOnboardingStep(3)}
+                      className="size-14 sm:size-20 bg-white/5 border border-white/10 rounded-xl sm:rounded-2xl flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10 transition-all"
+                    >
+                      <ChevronLeft size={20} className="sm:size-[24px]" />
+                    </button>
+                    <button 
+                      onClick={() => completeOnboarding()}
+                      className="flex-1 py-6 sm:py-8 bg-primary text-bg-dark rounded-2xl sm:rounded-[24px] font-black uppercase tracking-[0.2em] flex items-center justify-center gap-4 shadow-2xl shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all group text-sm sm:text-base"
+                    >
+                      Initialize Pilot
+                      <ArrowRight size={20} className="sm:size-[24px] group-hover:translate-x-2 transition-transform" />
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const isConfigPlaceholder = firebaseConfig.appId === 'PASTE_YOUR_WEB_APP_ID_HERE';
 
   const longPressTimer = React.useRef<NodeJS.Timeout | null>(null);
   const [isLongPress, setIsLongPress] = useState(false);
 
-  const handlePointerDown = (e: React.PointerEvent, task: Task) => {
+  const handlePointerDown = (e: React.PointerEvent, task: Mission) => {
     if ((e.target as HTMLElement).closest('button')) return;
     setIsLongPress(false);
     longPressTimer.current = setTimeout(() => {
@@ -389,31 +960,37 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (token) {
-      refreshUser();
-      fetchTasks();
-      fetchAnalytics();
-      fetchHabits();
-      fetchHabitStats();
-    } else {
-      setShowAuth(true);
+    if (isAuthReady) {
+      if (token) {
+        refreshUser();
+        fetchMissions();
+        fetchSelfAwareness();
+        fetchConsistencySystem();
+        fetchHabitStats();
+        fetchUserProfile();
+        fetchGoals();
+        fetchNextAction();
+        fetchAiInsights();
+      } else {
+        setShowAuth(true);
+      }
     }
     
     // Request notification permission
     if ("Notification" in window) {
       Notification.requestPermission();
     }
-  }, []);
+  }, [token, isAuthReady]);
 
   // Notification Reminder Logic
   useEffect(() => {
-    if (schedule.length === 0) return;
+    if (timelineMatrix.length === 0) return;
 
     const interval = setInterval(() => {
       const now = new Date();
       const currentHourMin = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       
-      schedule.forEach(task => {
+      timelineMatrix.forEach(task => {
         if (task.startTime === currentHourMin && task.status === 'pending') {
           if ("Notification" in window && Notification.permission === "granted") {
             new Notification("LifePilot AI: Task Starting!", { 
@@ -442,7 +1019,7 @@ export default function App() {
     }, 60000); // Check every minute
 
     return () => clearInterval(interval);
-  }, [schedule]);
+  }, [timelineMatrix]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -463,7 +1040,7 @@ export default function App() {
   const completeOnboarding = () => {
     localStorage.setItem('lifepilot_onboarded', 'true');
     setShowOnboarding(false);
-    if (tasks.length > 0) generateSchedule();
+    if (missions.length > 0) generateSchedule();
   };
 
   useEffect(() => {
@@ -512,6 +1089,7 @@ export default function App() {
         setUser(null);
         setShowAuth(true);
       }
+      setIsAuthReady(true);
     });
     return () => unsubscribe();
   }, []);
@@ -546,12 +1124,832 @@ export default function App() {
   };
 
   const handleGoogleLogin = async () => {
+    setLoading(true);
+    setError(null);
+    console.log("Starting Google login...");
     try {
-      await signInWithPopup(auth, googleProvider);
+      // Remove custom parameters for a moment to see if it helps with internal-error
+      // googleProvider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, googleProvider);
+      console.log("Google login successful:", result.user.email);
     } catch (err: any) {
-      setError(err.message || "Failed to initialize Google login");
+      console.error("Google login error details:", JSON.stringify(err, null, 2));
+      console.error("Error Code:", err.code);
+      console.error("Error Message:", err.message);
+      
+      if (err.code === 'auth/popup-blocked') {
+        setError("Popup blocked! Please allow popups for this site to sign in with Google.");
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError("This domain is not authorized for Google login. Please contact support.");
+      } else if (err.code === 'auth/internal-error') {
+        setError("Firebase internal error. This often happens if the Google provider is not enabled in the Firebase Console or if there's a configuration mismatch.");
+      } else {
+        setError(err.message || "Failed to initialize Google login");
+      }
+    } finally {
+      setLoading(false);
     }
   };
+
+  const LifeStateEngine = () => (
+    <div className="flex flex-col items-center py-8 sm:py-12">
+      <div className="diamond-container mb-8 sm:mb-12">
+        {/* Outer Glows */}
+        {theme.id === 'elite' && (
+          <>
+            <div className="diamond-glow scale-110 opacity-50" />
+            <div className="diamond-glow scale-125 opacity-20" />
+          </>
+        )}
+        
+        {/* Main Shape */}
+        <div className={`absolute inset-0 border-2 border-primary/30 ${theme.id === 'elite' ? 'rotate-45 rounded-xl' : theme.id === 'simple' ? 'rounded-full' : 'rounded-lg'} transition-all duration-500`} 
+             style={{ background: theme.id === 'elite' ? 'radial-gradient(circle at center, rgba(0, 242, 255, 0.1), transparent)' : 'transparent' }} />
+        
+        {/* Accents */}
+        {theme.id === 'elite' && (
+          <>
+            <div className="diamond-accent top-0 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+            <div className="diamond-accent bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2" />
+            <div className="diamond-accent left-0 top-1/2 -translate-y-1/2 -translate-x-1/2" />
+            <div className="diamond-accent right-0 top-1/2 -translate-y-1/2 translate-x-1/2" />
+          </>
+        )}
+
+        {/* Content */}
+        <div className="relative z-10 flex flex-col items-center">
+          <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/60 mb-1">{theme.wording.efficiency}</span>
+          <div className="flex items-baseline">
+            <span className={`text-5xl sm:text-7xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{lifeState.score}</span>
+            <span className="text-xl sm:text-2xl font-bold text-primary/60 ml-1">%</span>
+          </div>
+          <div className="mt-2 flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full border border-primary/20">
+            <div className={`size-1.5 bg-primary rounded-full ${theme.animations.type !== 'minimal' ? 'animate-pulse' : ''}`} />
+            <span className="text-[10px] font-bold uppercase tracking-widest text-primary">Optimal</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="w-full max-w-xs text-center space-y-2">
+        <div className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text-secondary">
+          <Zap className="size-3 text-primary" />
+          {theme.wording.insight}
+        </div>
+        <p className="text-sm font-medium text-text-primary leading-relaxed">
+          {lifeState.insight}
+        </p>
+      </div>
+    </div>
+  );
+
+  const MissionCard: React.FC<{ mission: Mission }> = ({ mission }) => {
+    const impactColor = mission.impact === 'critical' ? 'text-accent-red' : mission.impact === 'high' ? 'text-primary' : 'text-accent-purple';
+    const buttonClass = mission.impact === 'critical' ? 'mission-button-critical' : mission.impact === 'high' ? 'mission-button-high' : 'mission-button-moderate';
+
+    return (
+      <motion.div 
+        layout
+        initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 20 } : { opacity: 1 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="stitch-card p-4 sm:p-6 group relative overflow-hidden"
+      >
+        <div className="flex justify-between items-start mb-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] font-black uppercase tracking-widest ${impactColor}`}>
+                {mission.impact} {theme.id === 'elite' ? 'Impact' : theme.id === 'simple' ? 'Level' : ''}
+              </span>
+              <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest">•</span>
+              <span className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">
+                {mission.category}
+              </span>
+            </div>
+            <h3 className={`text-xl font-bold tracking-tight transition-colors ${theme.id === 'elite' ? 'text-white group-hover:text-primary' : 'text-text-primary'}`}>
+              {mission.title}
+            </h3>
+          </div>
+          <div className={`size-10 rounded-xl flex items-center justify-center text-text-secondary ${theme.id === 'elite' ? 'bg-white/5 border border-white/10' : 'bg-primary/10'}`}>
+            {mission.category === 'health' ? <Heart size={20} /> : mission.category === 'work' ? <Briefcase size={20} /> : <Target size={20} />}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 mb-6">
+          <div className="flex items-center gap-1.5 text-text-secondary">
+            <Clock size={14} />
+            <span className="text-xs font-medium">{mission.duration}m</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-text-secondary">
+            <Zap size={14} className="text-primary" />
+            <span className="text-xs font-medium">+{mission.xp || 100} XP</span>
+          </div>
+          {mission.deadline && (
+            <div className={`flex items-center gap-1.5 ${new Date(mission.deadline) < new Date() && mission.status === 'pending' ? 'text-accent-red' : 'text-text-secondary'}`}>
+              <Calendar size={14} />
+              <span className="text-xs font-medium">
+                {new Date(mission.deadline).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+          )}
+        </div>
+
+        <button 
+          onClick={() => toggleDone(mission.id)}
+          className={buttonClass}
+        >
+          {theme.wording.execute}
+          <ArrowRight size={18} />
+        </button>
+      </motion.div>
+    );
+  };
+
+  const renderMissionMatrix = () => (
+    <motion.div 
+      key="tasks"
+      initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 10 } : { opacity: 1 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      className="space-y-8 md:space-y-12 pb-32"
+    >
+      <div className="flex flex-col gap-6 md:gap-8">
+        <div>
+          <h2 className={`text-2xl md:text-5xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{theme.wording.missions}</h2>
+          <p className="text-text-secondary text-[8px] md:text-[10px] font-black uppercase tracking-[0.3em] mt-2">
+            {theme.id === 'elite' ? 'Tactical Asset Management & Deployment' : theme.id === 'simple' ? 'Keep track of everything you need to do!' : 'Manage your daily focus items.'}
+          </p>
+        </div>
+        <div className={`flex p-1.5 rounded-[20px] md:rounded-[24px] border overflow-x-auto no-scrollbar ${theme.id === 'elite' ? 'bg-white/[0.03] border-white/5' : 'bg-primary/5 border-primary/10'}`}>
+          {(['all', 'pending', 'completed', 'overdue'] as const).map(f => (
+            <button 
+              key={f}
+              onClick={() => setTaskFilter(f)}
+              className={`px-4 md:px-8 py-2 md:py-3.5 rounded-[16px] md:rounded-[18px] text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${taskFilter === f ? 'bg-primary text-bg-dark shadow-xl shadow-primary/20' : 'text-text-secondary hover:text-text-primary'}`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-8 md:space-y-10">
+        <form onSubmit={saveMission} className="stitch-card p-4 md:p-10 space-y-6 md:space-y-8 border-white/10 relative overflow-hidden">
+          <div className="absolute top-0 right-0 p-6 opacity-5 pointer-events-none">
+            <Zap size={120} />
+          </div>
+          <div className="flex items-center gap-4 relative z-10">
+            <div className={`size-10 md:size-12 rounded-xl md:rounded-2xl flex items-center justify-center shadow-inner ${editingMission ? 'bg-accent-red/10 text-accent-red' : 'bg-primary/10 text-primary'}`}>
+              {editingMission ? <Zap size={20} className="md:size-[24px]" /> : <Plus size={20} className="md:size-[24px]" />}
+            </div>
+            <h3 className={`text-lg md:text-2xl font-black tracking-tight ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>
+              {editingMission ? (theme.id === 'elite' ? 'Refine Mission' : 'Edit Task') : (theme.id === 'elite' ? 'Initialize Mission' : 'New Task')}
+            </h3>
+          </div>
+          <div className="space-y-6 md:space-y-8 relative z-10">
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-text-secondary uppercase tracking-widest ml-1">
+                {theme.id === 'elite' ? 'Mission Objective' : 'What needs to be done?'}
+              </label>
+              <input 
+                type="text" 
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={theme.id === 'elite' ? "Enter tactical objective..." : "e.g., Buy groceries"}
+                className="w-full bg-white/[0.03] border border-white/10 rounded-xl md:rounded-2xl px-4 md:px-8 py-3 md:py-6 focus:border-primary/50 transition-all outline-none font-bold text-lg md:text-2xl placeholder:text-slate-700"
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8">
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black text-text-secondary uppercase tracking-widest ml-1">Urgency Score (1-10)</label>
+                  <span className="text-xs font-black text-primary">{urgencyScore}</span>
+                </div>
+                <input 
+                  type="range" min="1" max="10" step="1"
+                  value={urgencyScore}
+                  onChange={(e) => setUrgencyScore(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer accent-primary"
+                />
+              </div>
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black text-text-secondary uppercase tracking-widest ml-1">Estimated Effort (1-5)</label>
+                  <span className="text-xs font-black text-accent-purple">{estimatedEffort}</span>
+                </div>
+                <input 
+                  type="range" min="1" max="5" step="1"
+                  value={estimatedEffort}
+                  onChange={(e) => setEstimatedEffort(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer accent-accent-purple"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8">
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black text-text-secondary uppercase tracking-widest ml-1">Impact Level (1-10)</label>
+                  <span className="text-xs font-black text-accent-blue">{impactLevel}</span>
+                </div>
+                <input 
+                  type="range" min="1" max="10" step="1"
+                  value={impactLevel}
+                  onChange={(e) => setImpactLevel(parseInt(e.target.value))}
+                  className="w-full h-1.5 bg-white/5 rounded-full appearance-none cursor-pointer accent-accent-blue"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-text-secondary uppercase tracking-widest ml-1">Duration (min)</label>
+                <input 
+                  type="number" 
+                  value={duration}
+                  onChange={(e) => setDuration(parseInt(e.target.value) || 0)}
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-xl md:rounded-2xl px-4 md:px-8 py-3 md:py-5 focus:border-primary/50 outline-none font-bold"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-text-secondary uppercase tracking-widest ml-1">
+                {theme.id === 'elite' ? 'Temporal Deadline' : 'Due Date'}
+              </label>
+              <input 
+                type="datetime-local" 
+                value={deadline}
+                onChange={(e) => {
+                  setDeadline(e.target.value);
+                  if (deadlineError) setDeadlineError(null);
+                }}
+                className={`w-full bg-white/[0.03] border rounded-xl md:rounded-2xl px-4 md:px-8 py-3 md:py-5 outline-none font-bold transition-colors ${deadlineError ? 'border-accent-red' : 'border-white/10 focus:border-primary/50'}`}
+              />
+              {deadlineError && (
+                <motion.p 
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-[10px] font-bold text-accent-red uppercase tracking-widest ml-1"
+                >
+                  {deadlineError}
+                </motion.p>
+              )}
+            </div>
+            <div className="flex flex-col sm:flex-row gap-4 pt-4">
+              <button 
+                type="submit"
+                disabled={loading}
+                className="flex-1 py-4 md:py-6 bg-primary text-bg-dark rounded-xl md:rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50"
+              >
+                {loading ? 'Processing...' : editingMission ? (theme.id === 'elite' ? 'Update Mission' : 'Save Changes') : (theme.id === 'elite' ? 'Deploy Mission' : 'Add Task')}
+              </button>
+              {editingMission && (
+                <button 
+                  type="button"
+                  onClick={resetForm}
+                  className="px-8 py-4 md:py-6 bg-white/5 text-text-secondary rounded-xl md:rounded-2xl font-black uppercase tracking-widest hover:bg-white/10 transition-all"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+
+        <div className="space-y-5">
+          {missions
+            .filter(m => {
+              if (taskFilter === 'all') return true;
+              if (taskFilter === 'pending') return m.status === 'pending';
+              if (taskFilter === 'completed') return m.status === 'completed';
+              if (taskFilter === 'overdue') return m.isOverdue;
+              return true;
+            })
+            .map((mission: Mission) => (
+              <MissionCard key={mission.id} mission={mission} />
+            ))}
+          {missions.length === 0 && (
+            <div className={`p-12 md:p-24 text-center border border-dashed rounded-[32px] md:rounded-[48px] ${theme.id === 'elite' ? 'text-slate-600 border-white/10 bg-white/[0.01]' : 'text-text-secondary border-primary/20 bg-primary/5'}`}>
+              <Sparkles size={48} className="mx-auto mb-6 opacity-10" />
+              <p className="font-black uppercase tracking-[0.3em] text-[10px] md:text-sm">{theme.id === 'elite' ? 'Matrix is empty' : 'No tasks yet'}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+
+  const renderTimelineMatrix = () => (
+    <motion.div 
+      key="schedule"
+      initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 10 } : { opacity: 1 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      className="space-y-8 md:space-y-12 pb-32"
+    >
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 px-0">
+        <div>
+          <h2 className={`text-2xl md:text-5xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{theme.wording.schedule}</h2>
+          <p className="text-text-secondary text-[8px] md:text-[10px] font-black uppercase tracking-[0.3em] mt-2">
+            {theme.id === 'elite' ? 'Temporal Optimization & Flow' : theme.id === 'simple' ? 'Your perfect day, planned out!' : 'Your daily focus timeline.'}
+          </p>
+        </div>
+        <button 
+          onClick={generateSchedule}
+          disabled={loading}
+          className="stitch-button stitch-button-primary text-[10px] uppercase tracking-widest w-full sm:w-auto"
+        >
+          {loading ? (theme.id === 'elite' ? 'Optimizing...' : 'Planning...') : (theme.id === 'elite' ? 'AI Re-Route' : 'Generate Schedule')}
+        </button>
+      </div>
+
+      <div className="relative pl-10 sm:pl-14 space-y-8 sm:space-y-12">
+        {/* Timeline Line */}
+        <div className="absolute left-[23px] sm:left-[27px] top-4 bottom-4 w-1 bg-gradient-to-b from-primary via-accent-purple to-accent-blue opacity-10 rounded-full"></div>
+        
+        {timelineMatrix.length > 0 ? timelineMatrix.map((mission, idx) => (
+          <div key={mission.id} className="relative group">
+            {/* Timeline Node */}
+            <div className={`absolute -left-[38px] sm:-left-[45px] top-2 size-7 sm:size-9 rounded-xl sm:rounded-2xl border-2 sm:border-4 border-bg-dark z-10 flex items-center justify-center transition-all duration-500 ${mission.status === 'completed' ? 'bg-primary' : 'bg-primary shadow-lg shadow-primary/40'}`}>
+              {mission.status === 'completed' ? <Check size={14} className="text-bg-dark" /> : <div className="size-1.5 rounded-full bg-white animate-pulse"></div>}
+            </div>
+            
+            <div className="stitch-card stitch-card-hover p-6 sm:p-8 border-white/5 relative overflow-hidden">
+              <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <span className="px-3 py-1 bg-white/5 rounded-lg text-[10px] font-black text-primary uppercase tracking-widest border border-primary/10">{mission.startTime}</span>
+                    <span className="text-[10px] font-black text-text-secondary uppercase tracking-widest">{mission.duration} MIN {theme.id === 'elite' ? 'DURATION' : ''}</span>
+                  </div>
+                  <h4 className={`text-xl sm:text-2xl font-black tracking-tight ${mission.status === 'completed' ? 'text-text-secondary line-through' : theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{mission.title}</h4>
+                </div>
+                <button 
+                  onClick={() => toggleDone(mission.id)}
+                  className={`size-10 sm:size-12 rounded-xl sm:rounded-2xl flex items-center justify-center transition-all duration-300 ml-auto sm:ml-0 ${mission.status === 'completed' ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-white/5 text-text-secondary hover:text-text-primary hover:bg-primary hover:text-bg-dark'}`}
+                >
+                  <CheckCircle2 size={20} />
+                </button>
+              </div>
+            </div>
+          </div>
+        )) : (
+          <div className={`stitch-card p-12 sm:p-24 text-center space-y-6 border-dashed ${theme.id === 'elite' ? 'border-white/10' : 'border-primary/20'}`}>
+            <Clock size={48} className="mx-auto text-text-secondary opacity-20" />
+            <div className="space-y-2">
+              <p className="text-text-secondary font-bold text-lg italic">{theme.id === 'elite' ? 'Timeline Matrix not initialized.' : 'No schedule generated yet.'}</p>
+              <p className="text-text-secondary text-xs font-medium">{theme.id === 'elite' ? 'Run AI Re-Route to generate your optimized path.' : 'Click the button above to plan your day!'}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+
+  const renderSelfAwareness = () => (
+    <motion.div 
+      key="analytics"
+      initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 10 } : { opacity: 1 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      className="space-y-8 sm:space-y-12 pb-32"
+    >
+      <div className="space-y-2">
+        <h2 className={`text-3xl sm:text-5xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{theme.wording.analytics}</h2>
+        <p className="text-text-secondary text-[10px] font-black uppercase tracking-[0.3em]">
+          {theme.id === 'elite' ? 'Neural Performance Analytics & Growth' : theme.id === 'simple' ? 'See how much you\'ve grown!' : 'Your performance metrics.'}
+        </p>
+      </div>
+
+      {/* Performance Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 sm:gap-8">
+        <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-white/10">
+          <div className="text-[10px] font-black text-text-secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Cognitive Efficiency' : 'Efficiency'}</div>
+          <div className="text-4xl sm:text-6xl font-black tracking-tighter text-primary">92%</div>
+          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full bg-primary w-[92%] shadow-[0_0_10px_rgba(66,133,244,0.5)]" />
+          </div>
+        </div>
+        <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-white/10">
+          <div className="text-[10px] font-black text-text-secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Consistency Index' : 'Consistency'}</div>
+          <div className="text-4xl sm:text-6xl font-black tracking-tighter text-accent-purple">8.4</div>
+          <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full bg-accent-purple w-[84%] shadow-[0_0_10px_rgba(147,51,234,0.5)]" />
+          </div>
+        </div>
+        <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-white/10">
+          <div className="text-[10px] font-black text-text-secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Focus Resilience' : 'Focus'}</div>
+          <div className="text-4xl sm:text-6xl font-black tracking-tighter text-primary">High</div>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map(i => (
+              <div key={i} className={`h-2 flex-1 rounded-full ${i <= 4 ? 'bg-primary shadow-[0_0_10px_rgba(0,242,255,0.5)]' : 'bg-white/5'}`} />
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Growth Visualization */}
+      <div className="glass-card p-8 border-white/5 space-y-6">
+        <div className="flex items-center justify-between">
+          <h3 className={`text-xl font-bold tracking-tight ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{theme.id === 'elite' ? 'Growth Trajectory' : 'Your Progress'}</h3>
+          <div className="flex items-center gap-2">
+            <div className="size-2 bg-primary rounded-full" />
+            <span className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">{theme.wording.score}</span>
+          </div>
+        </div>
+        <div className="h-64 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={[
+              { day: 'Mon', score: 65 },
+              { day: 'Tue', score: 68 },
+              { day: 'Wed', score: 75 },
+              { day: 'Thu', score: 72 },
+              { day: 'Fri', score: 84 },
+              { day: 'Sat', score: 88 },
+              { day: 'Sun', score: 92 },
+            ]}>
+              <defs>
+                <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3}/>
+                  <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+              <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: 'var(--color-text-secondary)', fontSize: 10, fontWeight: 'bold' }} />
+              <Tooltip 
+                contentStyle={{ backgroundColor: 'var(--color-bg-dark)', border: '1px solid var(--color-primary)', borderRadius: '16px' }}
+                itemStyle={{ color: 'var(--color-primary)', fontWeight: 'bold' }}
+              />
+              <Area type="monotone" dataKey="score" stroke="var(--color-primary)" strokeWidth={3} fillOpacity={1} fill="url(#colorScore)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </motion.div>
+  );
+
+  const NextActionCard = ({ task, onStartFocus }: { task: Mission | null, onStartFocus: (task: Mission) => void }) => {
+    if (!task) return null;
+    
+    return (
+      <div className="stitch-card p-6 bg-primary/10 border-primary/30 relative overflow-hidden group">
+        <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+          <Zap size={80} className="text-primary" />
+        </div>
+        
+        <div className="relative z-10">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="px-2 py-0.5 rounded-full bg-primary/20 text-[10px] font-black uppercase tracking-widest text-primary">
+              Next Strategic Action
+            </div>
+            {task.isOverdue && (
+              <div className="px-2 py-0.5 rounded-full bg-red-500/20 text-[10px] font-black uppercase tracking-widest text-red-500">
+                Overdue
+              </div>
+            )}
+          </div>
+          
+          <h3 className={`text-xl md:text-2xl font-black tracking-tighter mb-2 ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>
+            {task.title}
+          </h3>
+          
+          <div className="flex flex-wrap items-center gap-4 text-text-secondary text-xs font-bold uppercase tracking-widest mb-6">
+            <div className="flex items-center gap-1.5">
+              <Clock size={14} />
+              {task.duration}m
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Zap size={14} />
+              Impact: {task.impact}
+            </div>
+            {task.deadline && (
+              <div className="flex items-center gap-1.5">
+                <Calendar size={14} />
+                {new Date(task.deadline).toLocaleDateString()}
+              </div>
+            )}
+          </div>
+          
+          <button 
+            onClick={() => onStartFocus(task)}
+            className="w-full py-4 bg-primary text-white font-black uppercase tracking-[0.2em] rounded-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all shadow-lg shadow-primary/30"
+          >
+            <Play size={18} fill="currentColor" />
+            Engage Focus Mode
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const FocusMode = ({ task, onComplete, onCancel }: { task: Mission, onComplete: () => void, onCancel: () => void }) => {
+    const [timeLeft, setTimeLeft] = useState(task.duration * 60);
+    const [isActive, setIsActive] = useState(true);
+    const [distractions, setDistractions] = useState(0);
+    
+    useEffect(() => {
+      let interval: any = null;
+      if (isActive && timeLeft > 0) {
+        interval = setInterval(() => {
+          setTimeLeft((prev) => prev - 1);
+        }, 1000);
+      } else if (timeLeft === 0) {
+        clearInterval(interval);
+        onComplete();
+      }
+      return () => clearInterval(interval);
+    }, [isActive, timeLeft]);
+
+    const formatTime = (seconds: number) => {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const progress = ((task.duration * 60 - timeLeft) / (task.duration * 60)) * 100;
+
+    return (
+      <div className="fixed inset-0 z-[100] bg-background flex flex-col items-center justify-center p-6 md:p-12">
+        <div className="absolute inset-0 opacity-5 pointer-events-none">
+          <div className="h-full w-full bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-primary via-transparent to-transparent" />
+        </div>
+        
+        <div className="w-full max-w-2xl space-y-12 text-center relative z-10">
+          <div className="space-y-4">
+            <div className="text-[10px] md:text-xs font-black uppercase tracking-[0.5em] text-primary animate-pulse">
+              Deep Focus Protocol Active
+            </div>
+            <h2 className={`text-3xl md:text-5xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>
+              {task.title}
+            </h2>
+          </div>
+          
+          <div className="relative size-64 md:size-80 mx-auto flex items-center justify-center">
+            <svg className="absolute inset-0 size-full -rotate-90">
+              <circle
+                cx="50%"
+                cy="50%"
+                r="48%"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="4"
+                className="text-white/5"
+              />
+              <circle
+                cx="50%"
+                cy="50%"
+                r="48%"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="4"
+                strokeDasharray="301.59"
+                strokeDashoffset={301.59 - (301.59 * progress) / 100}
+                className="text-primary transition-all duration-1000"
+              />
+            </svg>
+            <div className={`text-6xl md:text-8xl font-black tabular-nums tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>
+              {formatTime(timeLeft)}
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-4">
+            <div className="stitch-card p-4 bg-white/5">
+              <div className="text-[10px] font-black uppercase tracking-widest text-text-secondary mb-1">Distractions</div>
+              <div className="text-2xl font-black text-primary">{distractions}</div>
+              <button 
+                onClick={() => setDistractions(d => d + 1)}
+                className="mt-2 text-[10px] font-bold uppercase text-text-secondary hover:text-primary transition-colors"
+              >
+                Log Distraction
+              </button>
+            </div>
+            <div className="stitch-card p-4 bg-white/5">
+              <div className="text-[10px] font-black uppercase tracking-widest text-text-secondary mb-1">Efficiency</div>
+              <div className="text-2xl font-black text-accent-purple">High</div>
+            </div>
+          </div>
+          
+          <div className="flex items-center justify-center gap-4">
+            <button 
+              onClick={() => setIsActive(!isActive)}
+              className="size-16 rounded-full bg-white/5 flex items-center justify-center text-text-primary hover:bg-white/10 transition-all"
+            >
+              {isActive ? <Pause size={24} /> : <Play size={24} fill="currentColor" />}
+            </button>
+            <button 
+              onClick={onCancel}
+              className="px-8 py-4 bg-white/5 text-text-secondary font-black uppercase tracking-widest rounded-xl hover:bg-red-500/10 hover:text-red-500 transition-all"
+            >
+              Abort Mission
+            </button>
+            <button 
+              onClick={onComplete}
+              className="px-8 py-4 bg-primary text-white font-black uppercase tracking-widest rounded-xl hover:scale-105 transition-all shadow-lg shadow-primary/20"
+            >
+              Complete Early
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDashboard = () => (
+    <div className="space-y-6 md:space-y-8 pb-32">
+      {/* Header */}
+      <div className="flex items-center justify-between px-0">
+        <div>
+          <h1 className={`text-2xl md:text-3xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>
+            {theme.wording.dashboard.split(' ')[0]} <span className="text-primary">{theme.wording.dashboard.split(' ')[1] || ''}</span>
+          </h1>
+          <p className="text-[10px] md:text-xs font-bold text-text-secondary uppercase tracking-[0.2em] mt-1">
+            {theme.wording.neuralSync}
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="text-right hidden sm:block">
+            <div className={`text-xs font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>Level 12</div>
+            <div className="w-24 h-1.5 bg-white/5 rounded-full mt-1 overflow-hidden">
+              <div className="w-3/4 h-full bg-primary" />
+            </div>
+          </div>
+          <div className={`size-10 md:size-12 rounded-xl md:rounded-2xl flex items-center justify-center text-text-secondary ${theme.id === 'elite' ? 'bg-white/5 border border-white/10' : 'bg-primary/10'}`}>
+            <Bell size={20} />
+          </div>
+        </div>
+      </div>
+
+      {/* Life State Engine */}
+      <LifeStateEngine />
+
+      {/* Strategic Intelligence */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <NextActionCard 
+            task={nextAction} 
+            onStartFocus={(task) => setFocusTask(task)} 
+          />
+        </div>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-text-secondary">AI Insights</h2>
+            <Brain size={14} className="text-primary" />
+          </div>
+          <div className="space-y-3">
+            {aiInsights.length > 0 ? aiInsights.map((insight, i) => (
+              <div key={i} className="stitch-card p-3 bg-white/5 border-l-2 border-primary/50">
+                <p className="text-xs font-medium text-text-primary leading-relaxed">
+                  {insight.insight_text}
+                </p>
+              </div>
+            )) : (
+              <div className="stitch-card p-3 bg-white/5 border-l-2 border-white/10 opacity-50">
+                <p className="text-xs font-medium text-text-secondary">
+                  Analyzing patterns... insights will appear shortly.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Core Actions */}
+      <div className="space-y-4">
+        <button 
+          onClick={() => setShowAiScheduleModal(true)}
+          className="pilot-button"
+        >
+          <Sparkles className="size-5 md:size-6" />
+          {theme.wording.pilot}
+        </button>
+        
+        <div className="grid grid-cols-2 gap-3 md:gap-4">
+          <button 
+            onClick={() => setActiveTab('tasks')}
+            className="stitch-card p-4 md:p-5 flex flex-col items-center gap-3 hover:bg-white/5 transition-all"
+          >
+            <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+              <LayoutGrid size={20} />
+            </div>
+            <span className={`text-[10px] font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{theme.wording.missions}</span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('schedule')}
+            className="stitch-card p-4 md:p-5 flex flex-col items-center gap-3 hover:bg-white/5 transition-all"
+          >
+            <div className="size-10 rounded-xl bg-accent-purple/10 flex items-center justify-center text-accent-purple">
+              <Activity size={20} />
+            </div>
+            <span className={`text-[10px] font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>{theme.wording.timeline}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Active Missions */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between px-0">
+          <h2 className="text-[10px] md:text-xs font-black uppercase tracking-[0.3em] text-text-secondary">{theme.wording.activeMissions}</h2>
+          <button className="text-[10px] font-black uppercase tracking-widest text-primary">View All</button>
+        </div>
+        <div className="grid grid-cols-1 gap-4">
+          {missions.filter(m => m.status === 'pending').slice(0, 3).map(mission => (
+            <MissionCard key={mission.id} mission={mission} />
+          ))}
+        </div>
+      </div>
+
+      {/* Consistency Pulse */}
+      <div className={`stitch-card p-4 md:p-6 bg-primary/5 ${theme.id === 'elite' ? 'border-primary/20' : 'border-primary/10'}`}>
+        <div className="flex items-center gap-4 mb-4">
+          <div className="size-10 md:size-12 rounded-xl md:rounded-2xl bg-primary/20 flex items-center justify-center text-primary">
+            <Activity size={20} className="md:hidden" />
+            <Activity size={24} className="hidden md:block" />
+          </div>
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-primary">Consistency Pulse</div>
+            <div className={`text-base md:text-lg font-bold ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>92% Stability</div>
+          </div>
+        </div>
+        <div className="flex gap-1 h-8 items-end">
+          {[40, 70, 45, 90, 65, 80, 95, 60, 85, 75, 90, 100].map((h, i) => (
+            <div 
+              key={i} 
+              className="flex-1 bg-primary/20 rounded-t-sm"
+              style={{ height: `${h}%` }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+  const renderSettings = () => (
+    <div className="space-y-8 pb-32">
+      <div className="space-y-2">
+        <h2 className={`text-3xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>System <span className="text-primary">Configuration</span></h2>
+        <p className="text-[10px] font-black uppercase tracking-[0.3em] text-text-secondary">UI Personality & Preferences</p>
+      </div>
+
+      <div className="space-y-6">
+        <div className="space-y-4">
+          <h3 className={`text-sm font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>Select UI Personality</h3>
+          <div className="grid grid-cols-1 gap-4">
+            {(['elite', 'simple', 'minimal'] as ThemeType[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTheme(t)}
+                className={`stitch-card p-6 flex items-center justify-between transition-all ${theme.id === t ? 'border-primary bg-primary/5 ring-1 ring-primary/20' : 'border-white/5 hover:bg-white/5'}`}
+              >
+                <div className="flex items-center gap-4">
+                  <div className={`size-12 rounded-2xl flex items-center justify-center ${t === 'elite' ? 'bg-primary/10 text-primary' : t === 'simple' ? 'bg-green-500/10 text-green-500' : 'bg-slate-500/10 text-slate-500'}`}>
+                    {t === 'elite' ? <Zap size={24} /> : t === 'simple' ? <Sparkles size={24} /> : <Target size={24} />}
+                  </div>
+                  <div className="text-left">
+                    <div className={`font-black uppercase tracking-widest ${theme.id === t ? 'text-primary' : theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>
+                      {t === 'elite' ? 'Elite AI' : t === 'simple' ? 'Simple & Friendly' : 'Minimal Clean'}
+                    </div>
+                    <div className="text-[10px] font-medium text-text-secondary">
+                      {t === 'elite' ? 'Futuristic, powerful, system-driven' : t === 'simple' ? 'Friendly, motivating, easy' : 'Clean, focused, distraction-free'}
+                    </div>
+                  </div>
+                </div>
+                {theme.id === t && (
+                  <div className="size-6 bg-primary rounded-full flex items-center justify-center text-bg-dark">
+                    <Check size={14} strokeWidth={3} />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="stitch-card p-6 border-white/5 space-y-6">
+          <h3 className={`text-sm font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>Account Protocol</h3>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 bg-white/[0.02] rounded-2xl border border-white/5">
+              <div className="flex items-center gap-3">
+                <div className="size-10 rounded-xl bg-white/5 flex items-center justify-center text-slate-400">
+                  <UserIcon size={20} />
+                </div>
+                <div>
+                  <div className={`text-xs font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>Neural ID</div>
+                  <div className="text-[10px] font-medium text-text-secondary">{user?.email}</div>
+                </div>
+              </div>
+              <button onClick={logout} className="text-[10px] font-black uppercase tracking-widest text-accent-red hover:brightness-110">De-Authorize</button>
+            </div>
+            
+            <div className="flex items-center justify-between p-4 bg-white/[0.02] rounded-2xl border border-white/5">
+              <div className="flex items-center gap-3">
+                <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                  <Shield size={20} />
+                </div>
+                <div>
+                  <div className={`text-xs font-black uppercase tracking-widest ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>Subscription</div>
+                  <div className="text-[10px] font-medium text-text-secondary">{user?.subscription_plan === 'premium' ? 'Elite Access Active' : 'Standard Protocol'}</div>
+                </div>
+              </div>
+              {user?.subscription_plan !== 'premium' && (
+                <button onClick={() => setShowPricing(true)} className="text-[10px] font-black uppercase tracking-widest text-primary hover:brightness-110 underline">Upgrade</button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 
   const logout = async () => {
     try {
@@ -562,45 +1960,89 @@ export default function App() {
       setToken(null);
       setUser(null);
       setShowAuth(true);
-      setTasks([]);
-      setSchedule([]);
-      setAnalytics(null);
-      setHabits([]);
-      setHabitStats([]);
+      setMissions([]);
+      setTimelineMatrix([]);
+      setSelfAwareness(null);
+      setConsistencySystem([]);
     } catch (error: any) {
       setError("Logout failed");
     }
   };
 
-  const fetchTasks = async () => {
+  const fetchMissions = async () => {
     try {
       const res = await apiFetch('/api/tasks');
       const data = await res.json();
       if (Array.isArray(data)) {
-        setTasks(data);
+        setMissions(data.map((m: any) => ({
+          ...m,
+          impact: m.importance >= 8 ? 'critical' : m.importance >= 6 ? 'high' : m.importance >= 4 ? 'moderate' : 'low',
+          urgency: m.importance
+        })));
       } else {
-        console.error("Tasks fetch returned non-array:", data);
-        setTasks([]);
+        console.error("Missions fetch returned non-array:", data);
+        setMissions([]);
         if (data.error) setError(data.error);
       }
     } catch (error) {
-      console.error("Failed to fetch tasks:", error);
-      setTasks([]);
+      console.error("Failed to fetch missions:", error);
+      setMissions([]);
     }
   };
 
-  const fetchHabits = async () => {
+  const fetchUserProfile = async () => {
+    try {
+      const res = await apiFetch('/api/user/profile');
+      const data = await res.json();
+      setUserProfile(data);
+    } catch (error) {
+      console.error("Failed to fetch profile:", error);
+    }
+  };
+
+  const fetchGoals = async () => {
+    try {
+      const res = await apiFetch('/api/goals');
+      const data = await res.json();
+      setGoals(data);
+    } catch (error) {
+      console.error("Failed to fetch goals:", error);
+    }
+  };
+
+  const fetchNextAction = async () => {
+    try {
+      const res = await apiFetch('/api/ai/next-action');
+      const data = await res.json();
+      if (data.id) setNextAction(data);
+      else setNextAction(null);
+    } catch (error) {
+      console.error("Failed to fetch next action:", error);
+    }
+  };
+
+  const fetchAiInsights = async () => {
+    try {
+      const res = await apiFetch('/api/ai/insights');
+      const data = await res.json();
+      setAiInsights(data);
+    } catch (error) {
+      console.error("Failed to fetch insights:", error);
+    }
+  };
+
+  const fetchConsistencySystem = async () => {
     try {
       const res = await apiFetch('/api/habits');
       const data = await res.json();
       if (Array.isArray(data)) {
-        setHabits(data);
+        setConsistencySystem(data);
       } else {
-        console.error("Habits fetch returned non-array:", data);
-        setHabits([]);
+        console.error("Consistency system fetch returned non-array:", data);
+        setConsistencySystem([]);
       }
     } catch (err) {
-      console.error("Failed to fetch habits:", err);
+      console.error("Failed to fetch consistency system:", err);
     }
   };
 
@@ -619,48 +2061,75 @@ export default function App() {
     }
   };
 
-  const fetchAnalytics = async () => {
+  const fetchSelfAwareness = async () => {
     try {
       const res = await apiFetch('/api/analytics');
       const data = await res.json();
       if (data && !data.error) {
-        setAnalytics(data);
+        setSelfAwareness(data);
       } else {
-        console.error("Analytics fetch error:", data?.error);
+        console.error("Self-awareness fetch error:", data?.error);
       }
     } catch (error) {
-      console.error("Failed to fetch analytics:", error);
+      console.error("Failed to fetch self-awareness:", error);
     }
   };
 
-  const saveTask = async (e: React.FormEvent) => {
+  const saveMission = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title || duration <= 0 || !token) return;
+
+    // Deadline validation
+    if (deadline) {
+      const selectedDate = new Date(deadline);
+      if (isNaN(selectedDate.getTime())) {
+        setDeadlineError("Invalid date format.");
+        return;
+      }
+      const now = new Date();
+      if (selectedDate < now) {
+        setDeadlineError("Deadline cannot be in the past.");
+        return;
+      }
+    }
+    setDeadlineError(null);
     
     setLoading(true);
     setError(null);
     try {
-      const method = editingTask ? 'PUT' : 'POST';
-      const url = editingTask ? `/api/tasks/${editingTask.id}` : '/api/tasks';
+      const method = editingMission ? 'PUT' : 'POST';
+      const url = editingMission ? `/api/tasks/${editingMission.id}` : '/api/tasks';
       
       const res = await apiFetch(url, {
         method,
         headers: { 
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ title, importance, duration, is_habit: isHabit, deadline, category }),
+        body: JSON.stringify({ 
+          title, 
+          importance: impactLevel, 
+          urgency_score: urgencyScore,
+          estimated_effort: estimatedEffort,
+          impact_level: impactLevel,
+          duration, 
+          is_habit: isHabit, 
+          deadline, 
+          category 
+        }),
       });
       
       if (!res.ok) {
         const errData = await res.json();
-        throw new Error(errData.error || "Failed to save task");
+        throw new Error(errData.error || "Failed to save mission");
       }
       
       resetForm();
-      await fetchTasks();
-      await fetchAnalytics();
+      await fetchMissions();
+      await fetchSelfAwareness();
+      await fetchNextAction();
+      await fetchAiInsights();
     } catch (error: any) {
-      console.error("Failed to save task:", error);
+      console.error("Failed to save mission:", error);
       setError(error.message);
     } finally {
       setLoading(false);
@@ -669,20 +2138,27 @@ export default function App() {
 
   const resetForm = () => {
     setTitle('');
-    setImportance(5);
+    setImpact('moderate');
+    setUrgencyScore(5);
+    setEstimatedEffort(3);
+    setImpactLevel(5);
     setDuration(30);
     setDeadline('');
+    setDeadlineError(null);
     setIsHabit(false);
-    setEditingTask(null);
+    setEditingMission(null);
   };
 
-  const startEdit = (task: Task) => {
-    setEditingTask(task);
-    setTitle(task.title);
-    setImportance(task.importance);
-    setDuration(task.duration);
-    setDeadline(task.deadline || '');
-    setIsHabit(task.is_habit);
+  const startEdit = (mission: Mission) => {
+    setEditingMission(mission);
+    setTitle(mission.title);
+    setImpact(mission.impact);
+    setUrgencyScore(mission.urgency_score || 5);
+    setEstimatedEffort(mission.estimated_effort || 3);
+    setImpactLevel(mission.impact_level || 5);
+    setDuration(mission.duration);
+    setDeadline(mission.deadline || '');
+    setIsHabit(mission.is_habit);
     setActiveTab('tasks');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -709,9 +2185,9 @@ export default function App() {
       }
     }
 
-    fetchTasks();
-    fetchAnalytics();
-    if (schedule.length > 0) generateSchedule();
+    fetchMissions();
+    fetchSelfAwareness();
+    if (timelineMatrix.length > 0) generateSchedule();
   };
 
   const deleteTask = async (id: number) => {
@@ -723,8 +2199,8 @@ export default function App() {
       console.log("Delete response status:", res.status);
       if (!res.ok) throw new Error("Failed to delete task");
       
-      await fetchTasks();
-      await fetchAnalytics();
+      await fetchMissions();
+      await fetchSelfAwareness();
       
       // If we are looking at the schedule, refresh it too
       if (activeTab === 'schedule') {
@@ -747,36 +2223,38 @@ export default function App() {
     setError(null);
 
     try {
-      const habitList = habits.map(h => `${h.title} (${h.frequency}, goal: ${h.goal_count})`).join(', ');
-      const taskList = tasks.map(t => t.title).join(', ');
-      const prompt = `Generate a daily schedule for a user with these tasks: ${taskList}. Also incorporate these habits: ${habitList}. Focus on productivity and balance. Return a concise, motivating summary.`;
+      const habitList = consistencySystem.map(h => `${h.title} (${h.frequency}, goal: ${h.goal_count})`).join(', ');
+      const missionList = missions.map(m => `${m.title} (Impact: ${m.impact}${m.deadline ? `, Due: ${m.deadline}` : ''})`).join(', ');
+      const prompt = `Generate a daily schedule for a user with these missions: ${missionList}. Also incorporate these consistency protocols (habits): ${habitList}. Focus on peak performance, cognitive load management, and circadian alignment. Return a concise, powerful strategist-level summary.`;
       
-      // Use backend AI endpoint for security (keeps keys hidden)
       const res = await apiFetch('/api/ai/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           prompt, 
-          systemInstruction: "You are LifePilot AI, a professional productivity assistant. Your goal is to help users optimize their daily schedules for maximum focus and balance. Be concise, motivating, and professional."
+          taskType: 'complex',
+          systemInstruction: "You are LifePilot AI, an elite productivity strategist. Your goal is to help users control their day for maximum output and biological alignment. Speak in short, powerful insights. Be authoritative and intelligent."
         })
       });
 
       const data = await res.json();
       
       if (!res.ok) {
-        throw new Error(data.error || "Failed to generate schedule");
+        throw new Error(data.error || "Failed to generate timeline matrix");
       }
 
       setAiSuggestion(data.text);
+      setAiScheduleContent(data.text);
+      setShowAiScheduleModal(true);
       
       // Also refresh the schedule from the backend
       const scheduleRes = await apiFetch('/api/schedule');
       const scheduleData = await scheduleRes.json();
       if (Array.isArray(scheduleData)) {
-        setSchedule(scheduleData);
+        setTimelineMatrix(scheduleData);
       } else {
-        console.error("Schedule fetch returned non-array:", scheduleData);
-        setSchedule([]);
+        console.error("Timeline matrix fetch returned non-array:", scheduleData);
+        setTimelineMatrix([]);
       }
       setActiveTab('schedule');
 
@@ -786,6 +2264,14 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const resetHabitForm = () => {
+    setHabitTitle('');
+    setHabitDesc('');
+    setHabitFreq('daily');
+    setHabitGoal(1);
+    setEditingHabit(null);
   };
 
   const saveHabit = async (e: React.FormEvent) => {
@@ -819,7 +2305,7 @@ export default function App() {
       setHabitGoal(1);
       setShowHabitModal(false);
       setEditingHabit(null);
-      fetchHabits();
+      fetchConsistencySystem();
       fetchHabitStats();
     } catch (err: any) {
       setError(err.message);
@@ -839,7 +2325,7 @@ export default function App() {
           spread: 60,
           origin: { y: 0.7 }
         });
-        fetchHabits();
+        fetchConsistencySystem();
         fetchHabitStats();
       }
     } catch (err: any) {
@@ -848,12 +2334,11 @@ export default function App() {
   };
 
   const deleteHabit = async (id: number) => {
-    if (!confirm("Are you sure you want to delete this habit?")) return;
     try {
       await apiFetch(`/api/habits/${id}`, {
         method: 'DELETE'
       });
-      fetchHabits();
+      fetchConsistencySystem();
       fetchHabitStats();
     } catch (err: any) {
       setError(err.message);
@@ -869,7 +2354,7 @@ export default function App() {
     setShowHabitModal(true);
   };
 
-  const getAiInsights = async (currentSchedule: Task[]) => {
+  const getAiInsights = async (currentSchedule: Mission[]) => {
     if (!token) return;
     
     try {
@@ -884,6 +2369,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           prompt,
+          taskType: 'complex',
           systemInstruction: "You are LifePilot AI, a professional productivity assistant. Your goal is to help users optimize their daily schedules for maximum focus and balance. Be concise, motivating, and professional."
         })
       });
@@ -910,12 +2396,12 @@ export default function App() {
   };
 
   const exportToICS = () => {
-    if (schedule.length === 0) return;
+    if (timelineMatrix.length === 0) return;
 
     let icsContent = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//LifePilot AI//EN\n";
     const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
 
-    schedule.forEach(task => {
+    timelineMatrix.forEach(task => {
       const start = task.startTime?.replace(':', '') + '00';
       const end = task.endTime?.replace(':', '') + '00';
       
@@ -998,9 +2484,9 @@ export default function App() {
     }
   };
 
-  const completionRate = analytics?.productivityScore || 0;
+  const completionRate = selfAwareness?.productivityScore || 0;
 
-  const filteredTasks = tasks.filter(task => {
+  const filteredTasks = missions.filter(task => {
     if (taskFilter === 'all') return true;
     if (taskFilter === 'pending') return task.status === 'pending';
     if (taskFilter === 'completed') return task.status === 'completed';
@@ -1060,9 +2546,43 @@ export default function App() {
     );
   }
 
+  const handleFocusComplete = async () => {
+    if (!focusTask) return;
+    try {
+      await toggleDone(focusTask.id);
+      setFocusTask(null);
+      fetchNextAction();
+      fetchAiInsights();
+    } catch (error) {
+      console.error("Failed to complete focus task:", error);
+    }
+  };
+
+  const handleFocusCancel = () => {
+    setFocusTask(null);
+  };
+
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-bg-primary text-text-primary font-sans selection:bg-accent-focus/30">
+      <div className={`min-h-screen text-text-primary font-sans selection:bg-primary/30 ${theme.id === 'elite' ? 'bg-bg-dark grid-background' : 'bg-background'}`}>
+      {/* Focus Mode Overlay */}
+      <AnimatePresence>
+        {focusTask && (
+          <motion.div
+            initial={{ opacity: 0, scale: 1.1 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="fixed inset-0 z-[200]"
+          >
+            <FocusMode 
+              task={focusTask} 
+              onComplete={handleFocusComplete} 
+              onCancel={handleFocusCancel} 
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Config Warning */}
       {isConfigPlaceholder && (
         <div className="bg-accent-urgent text-white text-center py-2 text-xs font-bold sticky top-0 z-[120]">
@@ -1077,77 +2597,145 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[110] bg-bg-primary flex items-center justify-center p-6"
+            className="fixed inset-0 z-[110] bg-bg-dark flex items-center justify-center p-4 md:p-6 grid-background overflow-y-auto"
           >
-            <div className="max-w-md w-full glass-card p-10 text-center space-y-8">
-              <div className="w-20 h-20 bg-primary/20 rounded-3xl flex items-center justify-center mx-auto text-primary">
-                <Sparkles size={40} />
+            <div className="max-w-md w-full stitch-card p-6 md:p-12 text-center space-y-6 md:space-y-10 border-white/10 my-auto">
+              <div className="size-16 md:size-24 bg-primary/10 rounded-[24px] md:rounded-[32px] flex items-center justify-center mx-auto text-primary shadow-inner border border-primary/20">
+                <Sparkles size={32} className="md:hidden" />
+                <Sparkles size={48} className="hidden md:block" />
               </div>
               
-              <div className="space-y-2">
-                <h2 className="text-3xl font-bold">{authMode === 'login' ? 'Welcome Back' : 'Create Account'}</h2>
-                <p className="text-text-secondary">Join LifePilot AI to automate your productivity.</p>
+              <div className="space-y-2 md:space-y-3">
+                <h2 className="text-3xl md:text-5xl font-black tracking-tighter">{authMode === 'login' ? 'System Login' : 'Initialize Pilot'}</h2>
+                <p className="text-slate-400 font-medium text-base md:text-lg">Elevate your cognitive architecture with AI.</p>
               </div>
 
-              <form onSubmit={authMode === 'login' ? login : signup} className="space-y-4">
+              <form onSubmit={authMode === 'login' ? login : signup} className="space-y-4 md:space-y-5">
                 <input 
                   type="email" 
-                  placeholder="Email" 
+                  placeholder="Neural ID (Email)" 
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:ring-2 focus:ring-primary transition-all"
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 md:px-8 md:py-5 focus:border-primary/50 transition-all outline-none font-bold text-lg placeholder:text-slate-700"
                   required
                 />
                 <input 
                   type="password" 
-                  placeholder="Password" 
+                  placeholder="Access Key (Password)" 
                   value={authPassword}
                   onChange={(e) => setAuthPassword(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:ring-2 focus:ring-primary transition-all"
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 md:px-8 md:py-5 focus:border-primary/50 transition-all outline-none font-bold text-lg placeholder:text-slate-700"
                   required
                 />
                 <button 
                   type="submit"
                   disabled={loading}
-                  className="w-full py-4 bg-primary text-white rounded-2xl font-bold shadow-lg glow-primary hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
+                  className="w-full py-4 md:py-6 bg-primary text-white rounded-2xl font-black uppercase tracking-[0.2em] shadow-xl shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50 text-sm md:text-base"
                 >
-                  {loading ? 'Processing...' : (authMode === 'login' ? 'Login' : 'Sign Up')}
+                  {loading ? 'Processing...' : (authMode === 'login' ? 'Authorize' : 'Initialize')}
                 </button>
               </form>
 
-              <div className="relative py-4">
+              <div className="relative py-1 md:py-2">
                 <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-white/10"></div>
+                  <div className="w-full border-t border-white/5"></div>
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-bg-primary px-2 text-slate-500">Or continue with</span>
+                <div className="relative flex justify-center text-[8px] md:text-[10px] font-black uppercase tracking-[0.3em]">
+                  <span className="bg-surface-dark px-4 md:px-6 text-slate-600">Secure Protocol</span>
                 </div>
               </div>
 
               <button 
                 onClick={handleGoogleLogin}
-                className="w-full py-4 bg-white/5 border border-white/10 text-white rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-white/10 transition-all"
+                disabled={loading}
+                className={`w-full py-4 md:py-5 bg-white/[0.03] border border-white/10 text-white rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-3 md:gap-4 hover:bg-white/10 transition-all text-xs md:text-sm ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="size-5" />
-                Google
+                {loading ? (
+                  <div className="size-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                ) : (
+                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="size-5 md:size-6" />
+                )}
+                {loading ? 'Processing...' : 'Google Auth'}
               </button>
 
-              <div className="pt-4">
+              <div className="pt-1 md:pt-2">
                 <button 
                   onClick={() => {
                     setAuthMode(authMode === 'login' ? 'signup' : 'login');
                     setError(null);
                     setAuthMessage(null);
                   }}
-                  className="text-sm text-slate-400 hover:text-white transition-colors"
+                  className="text-xs md:text-sm font-bold text-slate-500 hover:text-white transition-colors border-b border-white/5 pb-1"
                 >
                   {authMode === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Login"}
                 </button>
               </div>
               
-              {error && <p className="text-accent-urgent text-sm font-bold">{error}</p>}
-              {authMessage && <p className="text-primary text-sm font-bold">{authMessage}</p>}
+              {error && <p className="text-accent-urgent text-xs md:text-sm font-black uppercase tracking-widest">{error}</p>}
+              {authMessage && <p className="text-primary text-xs md:text-sm font-black uppercase tracking-widest">{authMessage}</p>}
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* AI Schedule Modal */}
+      <AnimatePresence>
+        {showAiScheduleModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-bg-primary/90 backdrop-blur-xl flex items-center justify-center p-4 md:p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20, opacity: 0 }}
+              animate={{ scale: 1, y: 0, opacity: 1 }}
+              className="glass-card p-6 md:p-10 max-w-2xl w-full space-y-6 md:space-y-8 border-primary/30 relative overflow-hidden"
+            >
+              <div className="absolute -top-24 -right-24 size-48 bg-primary/20 blur-[60px] rounded-full"></div>
+              
+              <div className="flex justify-between items-start relative z-10">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-3 text-primary">
+                    <Sparkles size={18} className="md:hidden" />
+                    <Sparkles size={20} className="hidden md:block" />
+                    <span className="text-[8px] md:text-[10px] font-black uppercase tracking-[0.3em]">Neural Temporal Alignment</span>
+                  </div>
+                  <h3 className="text-2xl md:text-4xl font-black tracking-tighter">Optimized Matrix</h3>
+                </div>
+                <button 
+                  onClick={() => setShowAiScheduleModal(false)} 
+                  className="size-10 md:size-12 flex items-center justify-center rounded-xl md:rounded-2xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-all"
+                >
+                  <X size={20} className="md:hidden" />
+                  <X size={24} className="hidden md:block" />
+                </button>
+              </div>
+
+              <div className="bg-white/[0.03] border border-white/10 rounded-[24px] md:rounded-[32px] p-6 md:p-10 max-h-[50vh] md:max-h-[60vh] overflow-y-auto relative z-10 no-scrollbar shadow-inner">
+                <div className="whitespace-pre-wrap text-slate-200 leading-relaxed font-medium text-lg md:text-xl italic">
+                  "{aiScheduleContent}"
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 md:gap-4 relative z-10">
+                <button 
+                  onClick={() => setShowAiScheduleModal(false)}
+                  className="flex-1 py-4 md:py-6 bg-primary text-bg-dark rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all text-xs md:text-sm"
+                >
+                  Confirm Deployment
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowAiScheduleModal(false);
+                    setActiveTab('schedule');
+                  }}
+                  className="flex-1 py-4 md:py-6 bg-white/5 border border-white/10 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-white/10 transition-all text-xs md:text-sm"
+                >
+                  View Timeline
+                </button>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -1159,74 +2747,89 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[110] bg-bg-primary/80 backdrop-blur-md flex items-center justify-center p-6"
+            className="fixed inset-0 z-[110] bg-bg-dark/80 backdrop-blur-xl flex items-center justify-center p-6 grid-background"
           >
             <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              className="glass-card p-10 max-w-lg w-full space-y-8 border-white/10"
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              className="stitch-card p-6 md:p-12 max-w-lg w-full space-y-6 md:space-y-10 border-white/10"
             >
               <div className="flex justify-between items-center">
-                <h3 className="text-3xl font-black tracking-tighter">{editingHabit ? 'Refine Habit' : 'Forge Habit'}</h3>
-                <button onClick={() => setShowHabitModal(false)} className="text-slate-500 hover:text-white">
-                  <X size={24} />
+                <div className="space-y-1">
+                  <h3 className="text-2xl md:text-4xl font-black tracking-tighter">{editingHabit ? 'Refine Habit' : 'Forge Habit'}</h3>
+                  <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em]">Neural Pathway Construction</p>
+                </div>
+                <button onClick={() => setShowHabitModal(false)} className="size-10 rounded-xl bg-white/5 flex items-center justify-center text-slate-500 hover:text-white transition-all">
+                  <X size={20} />
                 </button>
               </div>
 
-              <form onSubmit={saveHabit} className="space-y-6">
+              <form onSubmit={saveHabit} className="space-y-6 md:space-y-8">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Habit Title</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1">Habit Designation</label>
                   <input 
                     required
                     value={habitTitle}
                     onChange={(e) => setHabitTitle(e.target.value)}
-                    placeholder="e.g., Morning Meditation"
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:border-primary transition-all outline-none"
+                    placeholder="e.g., Deep Work Protocol"
+                    className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 md:px-8 md:py-5 focus:border-primary/50 transition-all outline-none font-bold text-lg placeholder:text-slate-700"
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Description</label>
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1">Strategic Intent</label>
                   <textarea 
                     value={habitDesc}
                     onChange={(e) => setHabitDesc(e.target.value)}
-                    placeholder="Why is this habit important?"
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:border-primary transition-all outline-none h-24 resize-none"
+                    placeholder="Define the purpose of this neural pathway..."
+                    className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 md:px-8 md:py-5 focus:border-primary/50 transition-all outline-none h-32 resize-none font-bold text-lg placeholder:text-slate-700"
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-8">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Frequency</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1">Cycle Frequency</label>
                     <select 
                       value={habitFreq}
                       onChange={(e) => setHabitFreq(e.target.value as any)}
-                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:border-primary transition-all outline-none appearance-none"
+                      className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 md:px-8 md:py-5 focus:border-primary/50 transition-all outline-none appearance-none font-bold cursor-pointer"
                     >
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
+                      <option value="daily">Daily Cycle</option>
+                      <option value="weekly">Weekly Cycle</option>
                     </select>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">Goal Count</label>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 ml-1">Target Intensity</label>
                     <input 
                       type="number"
                       min="1"
                       required
                       value={habitGoal}
                       onChange={(e) => setHabitGoal(parseInt(e.target.value))}
-                      className="w-full bg-white/5 border border-white/10 rounded-2xl px-6 py-4 focus:border-primary transition-all outline-none"
+                      className="w-full bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 md:px-8 md:py-5 focus:border-primary/50 transition-all outline-none font-bold"
                     />
                   </div>
                 </div>
 
-                <button 
-                  type="submit"
-                  disabled={loading}
-                  className="w-full py-5 bg-primary text-white rounded-2xl font-black uppercase tracking-widest shadow-lg glow-primary hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
-                >
-                  {loading ? 'Forging...' : editingHabit ? 'Update Habit' : 'Forge Habit'}
-                </button>
+                <div className="flex flex-col gap-4 pt-4">
+                  <button 
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-4 md:py-6 bg-primary text-bg-dark rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50"
+                  >
+                    {loading ? 'Processing...' : editingHabit ? 'Update Pathway' : 'Forge Pathway'}
+                  </button>
+
+                  {editingHabit && (
+                    <button 
+                      type="button"
+                      onClick={() => { deleteHabit(editingHabit.id); setShowHabitModal(false); }}
+                      className="w-full py-3 md:py-5 bg-white/5 text-accent-red rounded-2xl font-black uppercase tracking-widest hover:bg-accent-red/10 transition-all"
+                    >
+                      Decommission Habit
+                    </button>
+                  )}
+                </div>
               </form>
             </motion.div>
           </motion.div>
@@ -1240,51 +2843,55 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[105] bg-bg-primary/95 backdrop-blur-xl flex items-center justify-center p-6"
+            className="fixed inset-0 z-[105] bg-bg-dark/95 backdrop-blur-2xl flex items-center justify-center p-4 md:p-6 grid-background overflow-y-auto"
           >
-            <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="glass-card p-10 space-y-6 border-white/5">
-                <h3 className="text-2xl font-bold">Free Plan</h3>
-                <p className="text-slate-400">Perfect for getting started.</p>
-                <div className="text-4xl font-black">₹0 <span className="text-sm font-normal text-slate-500">/ forever</span></div>
-                <ul className="space-y-4 pt-6">
-                  {['Basic Task Management', 'Basic Schedule Generator', 'Limited Habit Tracking (3)', 'Standard Reminders'].map(f => (
-                    <li key={f} className="flex items-center gap-3 text-sm text-slate-300">
-                      <CheckCircle2 size={18} className="text-slate-500" /> {f}
+            <div className="max-w-5xl w-full grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-10 my-auto">
+              <div className="stitch-card p-6 md:p-12 space-y-4 md:space-y-8 border-white/5 bg-white/[0.02]">
+                <div className="space-y-2">
+                  <h3 className="text-xl md:text-3xl font-black tracking-tighter">Standard Tier</h3>
+                  <p className="text-slate-500 font-medium text-sm md:text-base">Foundational cognitive support.</p>
+                </div>
+                <div className="text-4xl md:text-6xl font-black tracking-tighter">₹0 <span className="text-[10px] md:text-sm font-black text-slate-700 uppercase tracking-widest">/ Lifetime</span></div>
+                <ul className="space-y-3 md:space-y-5 pt-4 md:pt-6">
+                  {['Basic Tactical Matrix', 'Standard Timeline Flow', 'Limited Habit Forge (3)', 'Neural Notifications'].map(f => (
+                    <li key={f} className="flex items-center gap-3 md:gap-4 text-slate-400 font-bold text-sm md:text-base">
+                      <CheckCircle2 size={18} className="text-slate-700 shrink-0" /> {f}
                     </li>
                   ))}
                 </ul>
                 <button 
                   onClick={() => setShowPricing(false)}
-                  className="w-full py-4 bg-white/5 border border-white/10 rounded-2xl font-bold text-slate-400"
+                  className="w-full py-4 md:py-6 bg-white/5 border border-white/10 rounded-2xl font-black uppercase tracking-widest text-slate-500 cursor-default text-xs md:text-sm"
                 >
-                  Current Plan
+                  Current Protocol
                 </button>
               </div>
 
-              <div className="glass-card p-10 space-y-6 border-primary/30 relative overflow-hidden bg-gradient-to-br from-primary/10 to-transparent">
-                <div className="absolute top-4 right-4 bg-primary text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full">Best Value</div>
-                <h3 className="text-2xl font-bold">Premium Plan</h3>
-                <p className="text-slate-400">Unlock your full potential.</p>
-                <div className="text-4xl font-black">₹499 <span className="text-sm font-normal text-slate-500">/ month</span></div>
-                <ul className="space-y-4 pt-6">
-                  {['AI Smart Scheduling', 'Advanced Productivity Analytics', 'Unlimited Habits & Tasks', 'AI Productivity Insights', 'Student Productivity Mode'].map(f => (
-                    <li key={f} className="flex items-center gap-3 text-sm text-white">
-                      <CheckCircle2 size={18} className="text-primary" /> {f}
+              <div className="stitch-card p-6 md:p-12 space-y-4 md:space-y-8 border-primary/30 relative overflow-hidden bg-gradient-to-br from-primary/10 via-transparent to-transparent shadow-2xl shadow-primary/10">
+                <div className="absolute top-4 right-4 md:top-6 md:right-6 bg-primary text-[8px] md:text-[10px] font-black uppercase tracking-[0.2em] px-3 md:px-4 py-1 md:py-1.5 rounded-full text-bg-dark">Elite Access</div>
+                <div className="space-y-2">
+                  <h3 className="text-xl md:text-3xl font-black tracking-tighter">Premium Tier</h3>
+                  <p className="text-slate-400 font-medium text-sm md:text-base">Full neural architecture unlock.</p>
+                </div>
+                <div className="text-4xl md:text-6xl font-black tracking-tighter text-primary">₹499 <span className="text-[10px] md:text-sm font-black text-slate-500 uppercase tracking-widest">/ Monthly</span></div>
+                <ul className="space-y-3 md:space-y-5 pt-4 md:pt-6">
+                  {['AI Neural Re-Routing', 'Advanced Performance Analytics', 'Unlimited Matrix Capacity', 'AI Cognitive Insights', 'Tactical Student Mode'].map(f => (
+                    <li key={f} className="flex items-center gap-3 md:gap-4 text-white font-bold text-sm md:text-base">
+                      <CheckCircle2 size={18} className="text-primary shrink-0" /> {f}
                     </li>
                   ))}
                 </ul>
                 <button 
                   onClick={() => initiatePayment(499)}
-                  className="w-full py-4 bg-primary text-white rounded-2xl font-bold shadow-lg glow-primary hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  className="w-full py-4 md:py-6 bg-primary text-bg-dark rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-primary/30 hover:brightness-110 active:scale-[0.98] transition-all text-xs md:text-sm"
                 >
-                  Upgrade to Premium
+                  Upgrade Protocol
                 </button>
                 <button 
                   onClick={() => setShowPricing(false)}
-                  className="w-full text-center text-xs text-slate-500 pt-2"
+                  className="w-full text-center text-[8px] md:text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-slate-400 transition-all pt-2"
                 >
-                  Maybe later
+                  Defer Upgrade
                 </button>
               </div>
             </div>
@@ -1294,129 +2901,37 @@ export default function App() {
 
       {/* Onboarding Overlay */}
       <AnimatePresence>
-        {showOnboarding && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-bg-primary flex items-center justify-center p-6"
-          >
-            <div className="max-w-md w-full glass-card p-10 text-center space-y-8">
-              <div className="w-20 h-20 bg-accent-ai/20 rounded-3xl flex items-center justify-center mx-auto text-accent-ai">
-                <Brain size={40} />
-              </div>
-              
-              <AnimatePresence mode="wait">
-                {onboardingStep === 1 && (
-                  <motion.div 
-                    key="step1"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="space-y-4"
-                  >
-                    <h2 className="text-3xl font-bold">Welcome to LifePilot AI</h2>
-                    <p className="text-text-secondary">What is your primary goal for using LifePilot AI?</p>
-                    <div className="grid grid-cols-1 gap-3 pt-4">
-                      {['Deep Focus', 'Daily Routine', 'Project Management', 'Habit Building'].map(goal => (
-                        <button 
-                          key={goal}
-                          onClick={() => setOnboardingStep(2)}
-                          className="p-4 bg-bg-tertiary hover:bg-white/10 rounded-2xl text-left transition-all flex items-center justify-between group"
-                        >
-                          {goal}
-                          <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-all" />
-                        </button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-                
-                {onboardingStep === 2 && (
-                  <motion.div 
-                    key="step2"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="space-y-4"
-                  >
-                    <h2 className="text-3xl font-bold">Your Routine</h2>
-                    <p className="text-text-secondary">When do you usually start your day?</p>
-                    <div className="grid grid-cols-2 gap-3 pt-4">
-                      {['5:00 AM', '6:00 AM', '7:00 AM', '8:00 AM', '9:00 AM', '10:00 AM'].map(time => (
-                        <button 
-                          key={time}
-                          onClick={() => setOnboardingStep(3)}
-                          className="p-4 bg-bg-tertiary hover:bg-white/10 rounded-2xl transition-all"
-                        >
-                          {time}
-                        </button>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-
-                {onboardingStep === 3 && (
-                  <motion.div 
-                    key="step3"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="space-y-6"
-                  >
-                    <h2 className="text-3xl font-bold">Ready to Launch</h2>
-                    <p className="text-text-secondary">LifePilot AI is ready to optimize your life. Let's build your first schedule.</p>
-                    <button 
-                      onClick={completeOnboarding}
-                      className="w-full py-4 bg-accent-ai text-white rounded-2xl font-bold shadow-lg shadow-accent-ai/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    >
-                      Start My Journey
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        )}
+        {showOnboarding && renderOnboarding()}
       </AnimatePresence>
 
       {/* Top Navigation / Header */}
-      <header className="flex items-center justify-between p-6 max-w-6xl mx-auto sticky top-0 z-40 bg-bg-dark/80 backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <div className="size-10 rounded-full bg-gradient-to-tr from-primary to-accent-blue flex items-center justify-center glow-primary">
-            <Sparkles className="text-white" size={20} />
+      <header className={`flex items-center justify-between p-4 md:p-6 max-w-6xl mx-auto sticky top-0 z-40 backdrop-blur-2xl border-b w-full ${theme.id === 'elite' ? 'bg-bg-dark/40 border-white/5' : 'bg-background/80 border-divider'}`}>
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="size-8 md:size-10 rounded-lg md:rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/20">
+            <Sparkles className={`${theme.id === 'elite' ? 'text-bg-dark' : 'text-white'} md:hidden`} size={16} />
+            <Sparkles className={`${theme.id === 'elite' ? 'text-bg-dark' : 'text-white'} hidden md:block`} size={20} />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">LifePilot AI</h1>
+          <h1 className={`text-lg md:text-2xl font-black tracking-tighter ${theme.id === 'elite' ? 'text-white' : 'text-text-primary'}`}>LifePilot <span className="text-primary">AI</span></h1>
           {user?.subscription_plan === 'premium' && (
-            <span className="bg-primary/20 text-primary text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border border-primary/30">Premium</span>
+            <span className="bg-primary/10 text-primary text-[7px] md:text-[8px] font-black uppercase tracking-widest px-1.5 md:px-2 py-0.5 md:py-1 rounded-md border border-primary/20">Premium</span>
           )}
         </div>
-        <div className="flex gap-4">
-          <div className="hidden md:flex items-center gap-6 mr-4">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Streak: {analytics?.habits.reduce((acc, h) => Math.max(acc, h.streak), 0) || 0} Days</span>
-            <div className="h-4 w-px bg-white/10"></div>
-          </div>
-          {user?.subscription_plan === 'trial' && (
-            <button 
-              onClick={() => setShowPricing(true)}
-              className="hidden md:flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary border border-primary/20 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-primary hover:text-white transition-all"
-            >
-              Upgrade
-            </button>
-          )}
-          <button 
-            onClick={logout}
-            className="size-10 flex items-center justify-center rounded-xl bg-surface-dark border border-white/10 text-slate-300 hover:text-white transition-colors"
-            title="Logout"
-          >
-            <X size={20} />
-          </button>
+        <div className="flex gap-3 md:gap-4 items-center">
           <button 
             onClick={() => setShowAiPanel(!showAiPanel)}
-            className="size-10 flex items-center justify-center rounded-xl bg-surface-dark border border-white/10 text-slate-300 hover:text-white transition-colors relative"
+            className={`size-8 md:size-10 flex items-center justify-center rounded-lg md:rounded-xl border transition-all relative ${theme.id === 'elite' ? 'bg-white/5 border-white/10 text-slate-300 hover:text-white' : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20'}`}
           >
-            <Brain size={20} />
-            <span className="absolute top-2.5 right-2.5 size-2 bg-primary rounded-full"></span>
+            <Brain size={18} className="md:hidden" />
+            <Brain size={20} className="hidden md:block" />
+            <span className={`absolute top-2 right-2 md:top-2.5 md:right-2.5 size-1.5 md:size-2 bg-primary rounded-full ${theme.id === 'elite' ? 'shadow-[0_0_8px_rgba(0,242,255,0.8)]' : ''}`}></span>
+          </button>
+          <button 
+            onClick={() => setActiveTab('settings')}
+            className={`size-8 md:size-10 flex items-center justify-center rounded-lg md:rounded-xl border transition-all ${theme.id === 'elite' ? 'bg-white/5 border-white/10 text-slate-300 hover:text-white' : 'bg-primary/10 border-primary/20 text-primary hover:bg-primary/20'}`}
+            title="Settings"
+          >
+            <Settings size={18} className="md:hidden" />
+            <Settings size={20} className="hidden md:block" />
           </button>
         </div>
       </header>
@@ -1424,884 +2939,37 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 px-6 pb-32 overflow-y-auto max-w-2xl mx-auto w-full">
         <AnimatePresence mode="wait">
-          {activeTab === 'home' && (
-            <motion.div 
-              key="home"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-8"
-            >
-              {/* Welcome & Motivation */}
-              <section className="space-y-2">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h2 className="text-3xl font-bold">Hello, {process.env.USER_EMAIL?.split('@')[0] || 'LifePilot'}</h2>
-                    <p className="text-slate-400 text-sm">{motivationQuote || "Your potential is limitless. Let's unlock it today."}</p>
-                  </div>
-                  {usage && (
-                    <div className="text-right space-y-1">
-                      <div className="flex items-center gap-2 justify-end">
-                        <span className={`text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border ${usage.plan === 'trial' ? 'bg-amber-500/10 text-amber-500 border-amber-500/30' : 'bg-primary/10 text-primary border-primary/30'}`}>
-                          {usage.plan} Plan
-                        </span>
-                      </div>
-                      <div className="w-32 h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                        <div 
-                          className={`h-full transition-all duration-500 ${usage.dailyRequests >= usage.limits.requests ? 'bg-accent-urgent' : 'bg-primary'}`}
-                          style={{ width: `${(usage.dailyRequests / usage.limits.requests) * 100}%` }}
-                        />
-                      </div>
-                      <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest">
-                        {usage.dailyRequests} / {usage.limits.requests} Requests Today
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              {/* Today's Focus Section */}
-              <section>
-                <div className="glass-card rounded-3xl p-8 relative overflow-hidden border-primary/20 bg-gradient-to-br from-surface-dark to-bg-dark">
-                  <div className="absolute -top-20 -right-20 size-64 bg-primary/10 blur-[100px] rounded-full"></div>
-                  <div className="flex flex-col md:flex-row items-center gap-10 relative z-10">
-                    {/* Circular Score */}
-                    <div className="relative size-40 flex items-center justify-center">
-                      <svg className="size-full -rotate-90">
-                        <circle className="text-white/5" cx="80" cy="80" fill="transparent" r="74" stroke="currentColor" strokeWidth="12"></circle>
-                        <circle 
-                          className="text-primary transition-all duration-1000" 
-                          cx="80" cy="80" fill="transparent" r="74" stroke="currentColor" 
-                          strokeDasharray="464.7" 
-                          strokeDashoffset={464.7 - (464.7 * completionRate / 100)} 
-                          strokeWidth="12"
-                          strokeLinecap="round"
-                        ></circle>
-                      </svg>
-                      <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className="text-4xl font-black tracking-tighter">{completionRate}%</span>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Flow</span>
-                      </div>
-                    </div>
-                    {/* Next Task & Timer */}
-                    <div className="flex-1 text-center md:text-left space-y-4">
-                      <div>
-                        <p className="text-primary text-[10px] font-black uppercase tracking-[0.2em] mb-1">Current Focus</p>
-                        <h3 className="text-3xl font-bold truncate max-w-[250px] md:max-w-none">
-                          {tasks.find(t => t.status === 'pending')?.title || 'All caught up!'}
-                        </h3>
-                      </div>
-                      <div className="flex items-center justify-center md:justify-start gap-4">
-                        <div className="bg-white/5 px-6 py-3 rounded-2xl border border-white/10 shadow-inner">
-                          <span className="text-4xl font-mono font-bold tracking-tighter text-white">{formatTime(focusTimer)}</span>
-                        </div>
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={() => setIsTimerRunning(!isTimerRunning)}
-                            className={`size-14 rounded-full flex items-center justify-center transition-all ${isTimerRunning ? 'bg-white/10 text-white border border-white/20' : 'bg-primary text-white glow-primary hover:scale-105'}`}
-                          >
-                            {isTimerRunning ? <Pause size={24} fill="currentColor" /> : <Play size={24} className="ml-1" fill="currentColor" />}
-                          </button>
-                          <button 
-                            onClick={() => { setFocusTimer(0); setIsTimerRunning(false); }}
-                            className="size-14 rounded-full flex items-center justify-center bg-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-all"
-                          >
-                            <RotateCcw size={20} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              {/* Quick Actions / Stats */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="glass-card p-5 flex items-center gap-4 border-white/5">
-                  <div className="size-10 rounded-xl bg-accent-orange/10 flex items-center justify-center text-accent-orange">
-                    <Flame size={20} />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Streak</p>
-                    <p className="text-lg font-bold">12 Days</p>
-                  </div>
-                </div>
-                <div className="glass-card p-5 flex items-center gap-4 border-white/5">
-                  <div className="size-10 rounded-xl bg-accent-blue/10 flex items-center justify-center text-accent-blue">
-                    <Trophy size={20} />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Rank</p>
-                    <p className="text-lg font-bold">Elite</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Next Up Tasks */}
-              <section>
-                <div className="flex justify-between items-end mb-4">
-                  <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Upcoming Queue</h2>
-                  <button onClick={() => setActiveTab('tasks')} className="text-[10px] font-bold text-primary uppercase tracking-widest hover:underline">View Vault</button>
-                </div>
-                <div className="space-y-3">
-                  {tasks.filter(t => t.status === 'pending').slice(0, 3).map(task => (
-                    <div 
-                      key={task.id} 
-                      onPointerDown={(e) => handlePointerDown(e, task)}
-                      onPointerUp={handlePointerUp}
-                      className={`glass-card rounded-2xl p-5 border-l-4 group hover:bg-white/5 transition-all cursor-pointer ${task.importance > 7 ? 'border-accent-orange' : 'border-accent-blue'}`}
-                    >
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`size-1.5 rounded-full ${task.importance > 7 ? 'bg-accent-orange' : 'bg-accent-blue'}`}></span>
-                            <span className={`text-[8px] font-black uppercase tracking-widest ${task.importance > 7 ? 'text-accent-orange' : 'text-accent-blue'}`}>
-                              {task.importance > 7 ? 'Critical' : 'Routine'}
-                            </span>
-                          </div>
-                          <h4 className="text-lg font-semibold text-slate-200">{task.title}</h4>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-bold text-white">{task.startTime || '--:--'}</p>
-                          <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">{task.duration}m</p>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <button 
-                            onClick={(e) => { e.stopPropagation(); if (window.confirm('Delete this task?')) deleteTask(task.id); }}
-                            className="text-slate-600 hover:text-accent-orange transition-colors"
-                            title="Delete Task"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); toggleDone(task.id); }}
-                          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-white hover:bg-primary transition-all"
-                        >
-                          <CheckCircle2 size={14} /> Complete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                  {tasks.filter(t => t.status === 'pending').length === 0 && (
-                    <div className="p-12 text-center text-slate-500 border border-dashed border-white/10 rounded-3xl bg-white/[0.02]">
-                      <Sparkles size={24} className="mx-auto mb-3 opacity-20" />
-                      <p className="text-xs font-bold uppercase tracking-widest">All tasks completed</p>
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              {/* Insights / Analytics */}
-              <section>
-                <div className="glass-card rounded-xl p-4 border border-white/5">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Sparkles className="text-primary" size={16} />
-                    <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">AI Insight</span>
-                  </div>
-                  <p className="text-sm leading-relaxed text-slate-300 italic">
-                    {aiSuggestion || "Your focus peaks in the morning. Schedule your deep work then for maximum results."}
-                  </p>
-                </div>
-              </section>
-            </motion.div>
-          )}
-
-          {activeTab === 'tasks' && (
-            <motion.div 
-              key="tasks"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-8"
-            >
-              <div className="flex flex-col gap-4">
-                <h2 className="text-sm font-semibold uppercase tracking-widest text-primary">Task Vault</h2>
-                <div className="flex bg-surface-dark p-1 rounded-xl border border-white/5 overflow-x-auto no-scrollbar">
-                  {(['all', 'pending', 'completed', 'overdue'] as const).map(f => (
-                    <button 
-                      key={f}
-                      onClick={() => setTaskFilter(f)}
-                      className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap ${taskFilter === f ? 'bg-primary text-white shadow-lg glow-primary' : 'text-slate-500 hover:text-slate-300'}`}
-                    >
-                      {f}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <form onSubmit={saveTask} className="glass-card p-6 space-y-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    {editingTask ? <Zap className="text-accent-orange" size={18} /> : <Plus className="text-primary" size={18} />}
-                    <h3 className="text-sm font-bold uppercase tracking-widest text-slate-300">
-                      {editingTask ? 'Edit Task' : 'Quick Add'}
-                    </h3>
-                  </div>
-                  <input 
-                    type="text" 
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="What needs to be done?"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Importance (1-10)</label>
-                      <input 
-                        type="number" 
-                        min="1" max="10"
-                        value={importance}
-                        onChange={(e) => setImportance(parseInt(e.target.value) || 5)}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus:ring-2 focus:ring-primary"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Duration (min)</label>
-                      <input 
-                        type="number" 
-                        value={duration}
-                        onChange={(e) => setDuration(parseInt(e.target.value) || 0)}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus:ring-2 focus:ring-primary"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Deadline</label>
-                    <input 
-                      type="datetime-local" 
-                      value={deadline}
-                      onChange={(e) => setDeadline(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 focus:ring-2 focus:ring-primary"
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
-                    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
-                      {['general', 'study', 'exam', 'work', 'personal'].map(cat => (
-                        <button 
-                          key={cat}
-                          type="button"
-                          onClick={() => setCategory(cat)}
-                          className={`px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all whitespace-nowrap ${category === cat ? 'bg-primary/20 border-primary text-primary' : 'bg-white/5 border-white/10 text-slate-500'}`}
-                        >
-                          {cat}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <button 
-                    type="button"
-                    onClick={() => setIsHabit(!isHabit)}
-                    className={`w-full py-2 rounded-xl font-bold flex items-center justify-center gap-2 transition-all ${isHabit ? 'bg-primary/20 text-primary border border-primary/30' : 'bg-white/5 text-slate-400 border border-white/5'}`}
-                  >
-                    <Flame size={16} /> {isHabit ? 'Daily Habit' : 'One-time Task'}
-                  </button>
-                  <button 
-                    type="submit"
-                    disabled={!title}
-                    className="w-full py-3 bg-primary text-white rounded-xl font-bold glow-primary hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
-                  >
-                    {editingTask ? 'Update Task' : 'Add to Queue'}
-                  </button>
-                  {editingTask && (
-                    <div className="flex gap-2">
-                      <button 
-                        type="button"
-                        onClick={() => { if (window.confirm('Are you sure you want to delete this task?')) { deleteTask(editingTask.id); resetForm(); } }}
-                        className="flex-1 py-3 bg-accent-urgent/10 text-accent-urgent border border-accent-urgent/20 rounded-xl font-bold hover:bg-accent-urgent hover:text-white transition-all"
-                      >
-                        Delete Task
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={resetForm}
-                        className="flex-1 py-3 bg-white/5 text-slate-500 rounded-xl font-bold hover:bg-white/10 transition-all"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                </form>
-              </div>
-
-                <div className="lg:col-span-8 space-y-4">
-                  <AnimatePresence mode="popLayout">
-                    {filteredTasks.map(task => (
-                      <motion.div 
-                        key={task.id}
-                        layout
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        onPointerDown={(e) => handlePointerDown(e, task)}
-                        onPointerUp={handlePointerUp}
-                        className={`glass-card p-5 rounded-2xl border-l-4 transition-all cursor-pointer group ${task.status === 'completed' ? 'opacity-50 border-slate-700' : task.importance > 7 ? 'border-accent-orange' : 'border-accent-blue'}`}
-                      >
-                        <div className="flex justify-between items-start">
-                          <div className="flex items-center gap-5">
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); toggleDone(task.id); }}
-                              className={`size-10 rounded-full border-2 flex items-center justify-center transition-all ${task.status === 'completed' ? 'bg-accent-done border-accent-done text-black' : 'border-white/10 hover:border-primary'}`}
-                            >
-                              {task.status === 'completed' ? <CheckCircle2 size={20} /> : <div className="size-2 rounded-full bg-white/20 group-hover:bg-primary transition-all"></div>}
-                            </button>
-                            <div>
-                              <h4 className={`text-xl font-bold ${task.status === 'completed' ? 'line-through text-slate-500' : 'text-white'}`}>{task.title}</h4>
-                              <div className="flex items-center gap-4 mt-1">
-                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1"><Clock size={12} /> {task.duration}m</span>
-                                <span className={`text-[10px] font-black uppercase tracking-widest flex items-center gap-1 ${task.importance > 7 ? 'text-accent-orange' : 'text-slate-500'}`}><Zap size={12} /> P{task.importance}</span>
-                                <span className="text-[10px] font-black text-primary uppercase tracking-widest border border-primary/20 px-2 rounded-full">{task.category}</span>
-                                {task.deadline && <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1"><Calendar size={12} /> {new Date(task.deadline).toLocaleDateString()}</span>}
-                                {task.isHabit && <Flame size={12} className="text-accent-orange" />}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 transition-all">
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); startEdit(task); }}
-                              className="p-2 text-slate-500 hover:text-white transition-all"
-                              title="Edit Task"
-                            >
-                              <Plus size={18} className="rotate-45" />
-                            </button>
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); if (window.confirm('Delete this task?')) deleteTask(task.id); }}
-                              className="p-2 text-slate-500 hover:text-accent-orange transition-all"
-                              title="Delete Task"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                  {filteredTasks.length === 0 && (
-                    <div className="p-20 text-center text-slate-500 border border-dashed border-white/10 rounded-[40px] bg-white/[0.02]">
-                      <Sparkles size={32} className="mx-auto mb-4 opacity-20" />
-                      <p className="font-bold uppercase tracking-widest text-sm">Vault is empty</p>
-                    </div>
-                  )}
-                </div>
-            </motion.div>
-          )}
-
-          {activeTab === 'schedule' && (
-            <motion.div 
-              key="schedule"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="max-w-4xl mx-auto space-y-10"
-            >
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                <div>
-                  <h2 className="text-4xl font-black tracking-tighter">Daily Roadmap</h2>
-                  <p className="text-slate-500 text-sm font-bold uppercase tracking-widest mt-1">AI Optimized Schedule</p>
-                </div>
-                <div className="flex gap-3 w-full md:w-auto">
-                  <button onClick={exportToICS} className="flex-1 md:flex-none p-4 bg-white/5 border border-white/10 rounded-2xl text-slate-400 hover:text-white transition-all flex items-center justify-center gap-2">
-                    <Download size={18} /> <span className="md:hidden text-xs font-bold uppercase tracking-widest">Export</span>
-                  </button>
-                  <button onClick={generateSchedule} className="flex-[2] md:flex-none bg-primary text-white px-8 py-4 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg glow-primary hover:scale-105 active:scale-95 transition-all">
-                    <Sparkles size={18} /> Re-Optimize
-                  </button>
-                </div>
-              </div>
-
-              {schedule.length > 0 ? (
-                <div className="space-y-6 relative">
-                  <div className="absolute left-[47px] top-4 bottom-4 w-0.5 bg-gradient-to-b from-primary/50 via-white/5 to-transparent" />
-                  {schedule.map((slot, idx) => (
-                    <div key={idx} className="flex gap-8 group">
-                      <div className="w-24 pt-6 text-right">
-                        <span className="text-xs font-black text-slate-500 uppercase tracking-widest">{slot.startTime}</span>
-                      </div>
-                      <div className="relative pb-4 flex-1">
-                        <div className={`absolute -left-[45px] top-6 size-4 rounded-full border-4 bg-bg-dark z-10 transition-all ${slot.status === 'completed' ? 'border-accent-done scale-75' : slot.isOverdue ? 'border-accent-orange animate-pulse' : 'border-white/20 group-hover:border-primary'}`} />
-                        <div className={`glass-card p-6 flex items-center justify-between group-hover:translate-x-2 transition-all border-white/5 ${slot.status === 'completed' ? 'opacity-40 grayscale' : ''}`}>
-                          <div className="flex items-center gap-6">
-                            <div className={`size-12 rounded-2xl flex items-center justify-center ${slot.importance > 7 ? 'bg-accent-orange/10 text-accent-orange' : 'bg-primary/10 text-primary'}`}>
-                              {slot.is_habit ? <Flame size={24} /> : <Zap size={24} />}
-                            </div>
-                            <div>
-                              <h4 className="text-xl font-bold text-white">{slot.title}</h4>
-                              <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-1">
-                                {slot.duration}m • {slot.startTime} - {slot.endTime}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); if (window.confirm('Delete this task?')) deleteTask(slot.id); }}
-                              className="size-10 rounded-xl flex items-center justify-center bg-white/5 hover:bg-accent-orange/20 text-slate-500 hover:text-accent-orange transition-all"
-                              title="Delete Task"
-                            >
-                              <Trash2 size={18} />
-                            </button>
-                            <button 
-                              onClick={() => toggleDone(slot.id)} 
-                              className={`size-10 rounded-xl flex items-center justify-center transition-all ${slot.status === 'completed' ? 'bg-accent-done text-black' : 'bg-white/5 hover:bg-primary text-slate-500 hover:text-white'}`}
-                            >
-                              <CheckCircle2 size={20} />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="p-32 text-center space-y-8 glass-card border-dashed border-white/10">
-                  <div className="size-24 bg-white/5 rounded-[40px] flex items-center justify-center mx-auto text-slate-600">
-                    <Calendar size={48} />
-                  </div>
-                  <div className="space-y-2">
-                    <h3 className="text-xl font-bold">Your roadmap is empty</h3>
-                    <p className="text-slate-500 text-sm max-w-xs mx-auto">LifePilot AI's AI can build a perfectly optimized schedule based on your tasks and habits.</p>
-                  </div>
-                  <button onClick={generateSchedule} className="bg-white text-black px-10 py-4 rounded-2xl font-bold hover:scale-105 transition-all shadow-xl">Generate Schedule</button>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {activeTab === 'habits' && (
-            <motion.div 
-              key="habits"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-10"
-            >
-              <div className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-4xl font-black tracking-tighter">Habit Forge</h2>
-                  <p className="text-slate-500 text-sm font-bold uppercase tracking-widest mt-1">Consistency is Mastery</p>
-                </div>
-                <button 
-                  onClick={() => { setShowHabitModal(true); setEditingHabit(null); }}
-                  className="size-12 rounded-2xl bg-primary text-white flex items-center justify-center shadow-lg glow-primary hover:scale-105 transition-all"
-                >
-                  <Plus size={24} />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {habits.map(habit => (
-                  <div key={habit.id} className="glass-card p-8 flex flex-col items-center text-center space-y-6 group relative border-white/5 hover:border-primary/30 transition-all">
-                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-                      <button 
-                        onClick={() => editHabit(habit)}
-                        className="p-2 text-slate-600 hover:text-primary"
-                      >
-                        <Edit3 size={18} />
-                      </button>
-                      <button 
-                        onClick={() => deleteHabit(habit.id)}
-                        className="p-2 text-slate-600 hover:text-accent-orange"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </div>
-                    <div className="relative">
-                      <div className="size-24 bg-accent-orange/10 rounded-[40px] flex items-center justify-center text-accent-orange streak-flame">
-                        <Flame size={48} fill="currentColor" />
-                      </div>
-                      <div className="absolute -bottom-2 -right-2 size-10 bg-surface-dark border-2 border-accent-orange rounded-full flex items-center justify-center text-xs font-black text-accent-orange">
-                        {habit.streak}
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="text-2xl font-bold text-white">{habit.title}</h3>
-                      <p className="text-slate-500 text-xs mt-1">{habit.description}</p>
-                      <p className="text-slate-500 font-black uppercase tracking-widest text-[10px] mt-2">{habit.frequency} Goal: {habit.goal_count}</p>
-                    </div>
-                    <div className="w-full space-y-2">
-                      <div className="flex justify-between text-[10px] font-black uppercase tracking-widest text-slate-500">
-                        <span>Progress</span>
-                        <span>{Math.min(100, Math.floor((habit.current_count / habit.goal_count) * 100))}%</span>
-                      </div>
-                      <div className="w-full bg-white/5 h-2.5 rounded-full overflow-hidden border border-white/5">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: `${Math.min(100, (habit.current_count / habit.goal_count) * 100)}%` }}
-                          className="h-full bg-gradient-to-r from-accent-orange to-primary"
-                        />
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => completeHabit(habit.id)}
-                      disabled={habit.current_count >= habit.goal_count}
-                      className={`w-full py-4 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 ${habit.current_count >= habit.goal_count ? 'bg-accent-done/20 text-accent-done border border-accent-done/30' : 'bg-white text-black hover:scale-[1.02] shadow-xl'}`}
-                    >
-                      {habit.current_count >= habit.goal_count ? <><CheckCircle2 size={18} /> Goal Met</> : 'Mark Progress'}
-                    </button>
-                  </div>
-                ))}
-                <button 
-                  onClick={() => { setShowHabitModal(true); setEditingHabit(null); }}
-                  className="glass-card p-8 border-dashed border-white/10 flex flex-col items-center justify-center text-slate-500 hover:text-white hover:border-white/20 transition-all space-y-4 bg-white/[0.02]"
-                >
-                  <div className="size-16 rounded-3xl border-2 border-current flex items-center justify-center">
-                    <Plus size={32} />
-                  </div>
-                  <span className="font-bold uppercase tracking-widest text-xs">Forge New Habit</span>
-                </button>
-              </div>
-
-              {habitStats.length > 0 && (
-                <div className="glass-card p-10 space-y-8 border-white/5">
-                  <h3 className="text-2xl font-bold">Habit History (30 Days)</h3>
-                  <div className="h-80 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={habitStats[0]?.history || []}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                        <XAxis dataKey="date" stroke="#64748b" fontSize={10} />
-                        <YAxis stroke="#64748b" fontSize={10} />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px' }}
-                          itemStyle={{ color: '#fff' }}
-                        />
-                        {habitStats.map((stat, idx) => (
-                          <Line 
-                            key={stat.id} 
-                            type="monotone" 
-                            dataKey="count" 
-                            data={stat.history} 
-                            name={stat.title}
-                            stroke={idx === 0 ? '#4285F4' : idx === 1 ? '#F27D26' : '#34A853'} 
-                            strokeWidth={3}
-                            dot={{ r: 4, fill: idx === 0 ? '#4285F4' : idx === 1 ? '#F27D26' : '#34A853' }}
-                          />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {activeTab === 'analytics' && (
-            <motion.div 
-              key="analytics"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-8 pb-20"
-            >
-              <div className="flex flex-col gap-2">
-                <h2 className="text-sm font-semibold uppercase tracking-widest text-primary">Performance Core</h2>
-                <p className="text-xs text-slate-500">Real-time productivity telemetry</p>
-              </div>
-
-              {/* Top Stats */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="glass-card p-6 border-white/5">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Flow State</p>
-                  <p className="text-3xl font-black text-white">{analytics?.productivityScore || 0}%</p>
-                  <div className="mt-2 w-full bg-white/5 h-1 rounded-full overflow-hidden">
-                    <div 
-                      className="bg-primary h-full transition-all duration-1000" 
-                      style={{ width: `${analytics?.productivityScore || 0}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="glass-card p-6 border-white/5">
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Focus Time</p>
-                  <p className="text-3xl font-black text-white">{analytics?.focusTimeMinutes || 0}m</p>
-                  <p className="text-[10px] text-slate-500 mt-1">Total deep work</p>
-                </div>
-              </div>
-
-              {/* Main Chart */}
-              <div className="glass-card p-6 border-white/5">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300">Activity Pulse</h3>
-                  <div className="flex gap-2">
-                    <span className="size-2 rounded-full bg-primary"></span>
-                    <span className="text-[8px] font-bold text-slate-500 uppercase">Last 7 Days</span>
-                  </div>
-                </div>
-                <div className="h-64 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart
-                      data={analytics?.advanced?.completionRateByDay || [
-                        { day: 'Mon', count: 4 },
-                        { day: 'Tue', count: 7 },
-                        { day: 'Wed', count: 5 },
-                        { day: 'Thu', count: 9 },
-                        { day: 'Fri', count: 12 },
-                        { day: 'Sat', count: 8 },
-                        { day: 'Sun', count: 6 },
-                      ]}
-                      margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
-                    >
-                      <defs>
-                        <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
-                          <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
-                      <XAxis 
-                        dataKey="day" 
-                        axisLine={false} 
-                        tickLine={false} 
-                        tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }}
-                        dy={10}
-                      />
-                      <YAxis 
-                        axisLine={false} 
-                        tickLine={false} 
-                        tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }}
-                      />
-                      <Tooltip 
-                        contentStyle={{ 
-                          backgroundColor: '#0f172a', 
-                          border: '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: '12px',
-                          fontSize: '12px'
-                        }}
-                        itemStyle={{ color: '#fff' }}
-                      />
-                      <Area 
-                        type="monotone" 
-                        dataKey="count" 
-                        stroke="#6366f1" 
-                        strokeWidth={3}
-                        fillOpacity={1} 
-                        fill="url(#colorCount)" 
-                        animationDuration={2000}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Habit Streaks */}
-              <div className="space-y-4">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500 px-1">Habit Resilience</h3>
-                <div className="grid grid-cols-1 gap-3">
-                  {analytics?.habits?.map(habit => (
-                    <div key={habit.id} className="glass-card p-4 flex items-center justify-between border-white/5">
-                      <div className="flex items-center gap-3">
-                        <div className="size-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-                          <Zap size={16} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold">{habit.title}</p>
-                          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">{habit.streak} Day Streak</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-1">
-                        {[...Array(7)].map((_, i) => (
-                          <div 
-                            key={i} 
-                            className={`size-2 rounded-full ${i < (habit.streak % 7) ? 'bg-primary shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-white/5'}`}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                  {(!analytics?.habits || analytics.habits.length === 0) && (
-                    <div className="p-8 text-center glass-card border-dashed border-white/10 text-slate-500">
-                      <p className="text-[10px] font-bold uppercase tracking-widest">No habits forged yet</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* AI Productivity Score */}
-              <div className="glass-card p-8 bg-gradient-to-br from-primary/20 to-transparent border-primary/20 relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <Brain size={120} />
-                </div>
-                <div className="relative z-10 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="text-primary" size={20} />
-                    <h3 className="text-lg font-bold">AI Performance Audit</h3>
-                  </div>
-                  <p className="text-sm text-slate-300 leading-relaxed">
-                    Based on your last 7 days of telemetry, your focus is 14% higher than the average user in your cohort. 
-                    Your peak performance window is <strong>10:15 AM — 1:45 PM</strong>.
-                  </p>
-                  <div className="pt-2">
-                    <button className="px-6 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg glow-primary">
-                      Download Full Report
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {activeTab === 'settings' && (
-            <motion.div 
-              key="settings"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-10"
-            >
-              <div className="flex justify-between items-end">
-                <div>
-                  <h2 className="text-4xl font-black tracking-tighter">Settings</h2>
-                  <p className="text-slate-500 text-sm font-bold uppercase tracking-widest mt-1">Manage Your Experience</p>
-                </div>
-                <div className="size-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-slate-400">
-                  <Settings size={24} />
-                </div>
-              </div>
-
-              <section className="space-y-4">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] px-4">Account & Subscription</h3>
-                <div className="glass-card divide-y divide-white/5 overflow-hidden border-white/5">
-                  <div className="p-6 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                        <CreditCard size={20} />
-                      </div>
-                      <div>
-                        <p className="font-bold">Subscription Plan</p>
-                        <p className="text-xs text-slate-500 capitalize">{usage?.plan || 'Free'} Plan</p>
-                      </div>
-                    </div>
-                    {usage?.plan === 'trial' || usage?.plan === 'free' ? (
-                      <button 
-                        onClick={() => setShowPricing(true)}
-                        className="px-4 py-2 bg-primary text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-lg glow-primary"
-                      >
-                        Upgrade
-                      </button>
-                    ) : (
-                      <span className="text-[10px] font-black text-accent-done uppercase tracking-widest">Active</span>
-                    )}
-                  </div>
-                  <div className="p-6 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="size-10 rounded-xl bg-white/5 flex items-center justify-center text-slate-400">
-                        <Shield size={20} />
-                      </div>
-                      <div>
-                        <p className="font-bold">Account Email</p>
-                        <p className="text-xs text-slate-500">{user?.email}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-
-              <section className="space-y-4">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] px-4">Legal & Support</h3>
-                <div className="glass-card divide-y divide-white/5 overflow-hidden border-white/5">
-                  <button 
-                    onClick={() => setShowTerms(true)}
-                    className="w-full p-6 flex items-center justify-between hover:bg-white/5 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="size-10 rounded-xl bg-white/5 flex items-center justify-center text-slate-400">
-                        <FileText size={20} />
-                      </div>
-                      <p className="font-bold">Terms of Service</p>
-                    </div>
-                    <ChevronRight size={18} className="text-slate-600" />
-                  </button>
-                  <button 
-                    onClick={() => setShowPrivacy(true)}
-                    className="w-full p-6 flex items-center justify-between hover:bg-white/5 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="size-10 rounded-xl bg-white/5 flex items-center justify-center text-slate-400">
-                        <Shield size={20} />
-                      </div>
-                      <p className="font-bold">Privacy Policy</p>
-                    </div>
-                    <ChevronRight size={18} className="text-slate-600" />
-                  </button>
-                </div>
-              </section>
-
-              <button 
-                onClick={logout}
-                className="w-full p-6 glass-card border-accent-urgent/20 flex items-center justify-center gap-3 text-accent-urgent font-bold hover:bg-accent-urgent/5 transition-colors"
-              >
-                <LogOut size={20} /> Sign Out
-              </button>
-
-              <div className="text-center space-y-2">
-                <p className="text-[10px] font-black text-slate-700 uppercase tracking-widest">LifePilot AI v1.0.0</p>
-                <p className="text-[8px] text-slate-800">Designed for the Play Store</p>
-              </div>
-            </motion.div>
-          )}
+          {activeTab === 'home' && renderDashboard()}
+          {activeTab === 'tasks' && renderMissionMatrix()}
+          {activeTab === 'schedule' && renderTimelineMatrix()}
+          {activeTab === 'analytics' && renderSelfAwareness()}
+          {activeTab === 'settings' && renderSettings()}
         </AnimatePresence>
       </main>
 
-      {/* Legal Overlays */}
-      <AnimatePresence>
-        {showPrivacy && <PrivacyPolicy onClose={() => setShowPrivacy(false)} />}
-        {showTerms && <TermsOfService onClose={() => setShowTerms(false)} />}
-      </AnimatePresence>
-
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 px-6 pb-6 pointer-events-none">
-        <div className="max-w-lg mx-auto glass-card p-2 flex items-center justify-between pointer-events-auto shadow-2xl border-white/5">
+      <nav className="fixed bottom-6 sm:bottom-8 left-1/2 -translate-x-1/2 z-50 w-[94%] sm:w-[90%] max-w-lg">
+        <div className={`stitch-card p-1.5 sm:p-2 flex items-center justify-between shadow-2xl backdrop-blur-3xl rounded-[32px] ${theme.id === 'elite' ? 'bg-black/60 border-white/10' : 'bg-white/80 border-divider'}`}>
           {[
-            { id: 'home', icon: Home, label: 'Home' },
-            { id: 'tasks', icon: LayoutDashboard, label: 'Vault' },
-            { id: 'schedule', icon: Calendar, label: 'Roadmap' },
-            { id: 'analytics', icon: BarChart3, label: 'Stats' },
-            { id: 'settings', icon: Settings, label: 'Menu' }
+            { id: 'home', icon: LayoutDashboard, label: theme.wording.dashboard.split(' ')[0] },
+            { id: 'tasks', icon: Target, label: theme.wording.missions.split(' ')[0] },
+            { id: 'schedule', icon: Clock, label: theme.wording.timeline.split(' ')[0] },
+            { id: 'analytics', icon: Brain, label: theme.wording.awareness.split(' ')[0] },
+            { id: 'settings', icon: Settings, label: 'Style' },
           ].map(item => (
             <button 
               key={item.id}
               onClick={() => setActiveTab(item.id as any)}
-              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-all ${activeTab === item.id ? 'bg-primary text-white shadow-lg glow-primary' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`flex flex-col items-center gap-1 sm:gap-1.5 px-3 sm:px-6 py-3 sm:py-4 rounded-[24px] sm:rounded-[28px] transition-all duration-500 ${
+                activeTab === item.id ? 'nav-item-active shadow-xl shadow-primary/20 scale-105' : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+              }`}
             >
-              <item.icon size={20} />
-              <span className="text-[8px] font-bold uppercase tracking-widest">{item.label}</span>
+              <item.icon size={20} strokeWidth={activeTab === item.id ? 3 : 2} className="sm:size-[22px]" />
+              <span className="text-[8px] sm:text-[9px] font-black uppercase tracking-widest">{item.label}</span>
             </button>
           ))}
         </div>
       </nav>
-
-      {/* Floating AI Assistant */}
-      <div className="fixed bottom-24 right-6 md:bottom-10 md:right-10 z-[60]">
-        <AnimatePresence>
-          {showAiPanel && (
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="absolute bottom-20 right-0 w-80 glass-card p-6 shadow-2xl border-accent-ai/20"
-            >
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="font-bold flex items-center gap-2 text-accent-ai"><Brain size={18} /> LifePilot AI</h4>
-                <button onClick={() => setShowAiPanel(false)} className="text-text-muted hover:text-white"><X size={18} /></button>
-              </div>
-              <div className="space-y-4 text-sm">
-                <p className="text-text-secondary">I've analyzed your patterns. You're most productive between 10 AM and 1 PM.</p>
-                <div className="p-3 bg-white/5 rounded-xl border border-white/5">
-                  <p className="font-bold text-xs uppercase tracking-widest text-text-muted mb-1">Recommendation</p>
-                  <p>Move "Project Work" to 10:30 AM for peak focus.</p>
-                </div>
-                <button onClick={generateSchedule} className="w-full py-3 bg-accent-ai text-white rounded-xl font-bold text-xs uppercase tracking-widest">Apply Optimization</button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <button 
-          onClick={() => setShowAiPanel(!showAiPanel)}
-          className="w-16 h-16 rounded-[24px] bg-accent-ai text-white flex items-center justify-center shadow-xl shadow-accent-ai/30 hover:scale-110 active:scale-90 transition-all"
-        >
-          <Sparkles size={28} />
-        </button>
-      </div>
     </div>
     </ErrorBoundary>
   );

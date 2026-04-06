@@ -89,6 +89,11 @@ service cloud.firestore {
              data.created_at is timestamp;
     }
 
+    function isFieldUnchanged(field) {
+      return !(field in request.resource.data) || 
+             request.resource.data[field] == resource.data[field];
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -96,10 +101,16 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
-                       request.resource.data.role == 'user'; // Users can only create themselves as 'user'
+                       request.resource.data.role == 'user' &&
+                       request.resource.data.subscription_plan == 'trial' &&
+                       (request.resource.data.trial_used == 0 || request.resource.data.trial_used == null);
       allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
                        request.resource.data.firebase_uid == resource.data.firebase_uid &&
-                       (request.resource.data.role == resource.data.role || isAdmin()); // Only admins can change roles
+                       (isAdmin() || (
+                         isFieldUnchanged('role') &&
+                         isFieldUnchanged('subscription_plan') &&
+                         isFieldUnchanged('trial_used')
+                       ));
       
       match /tasks/{taskId} {
         allow read: if isOwner(userId) || isAdmin();
