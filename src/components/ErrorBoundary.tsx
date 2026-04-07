@@ -41,16 +41,16 @@ class ErrorBoundary extends (React.Component as any) {
       }
 
       return (
-        <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6">
-          <div className="glass-card p-8 max-w-md w-full text-center space-y-6 border-accent-urgent/20">
-            <div className="size-16 bg-accent-urgent/10 rounded-full flex items-center justify-center mx-auto text-accent-urgent">
+        <div className="min-h-screen bg-background flex items-center justify-center p-6">
+          <div className="stitch-card p-8 max-w-md w-full text-center space-y-6 border-danger/20">
+            <div className="size-16 bg-danger/10 rounded-full flex items-center justify-center mx-auto text-danger">
               <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             </div>
-            <h2 className="text-xl font-bold text-white">Something went wrong</h2>
-            <p className="text-slate-400 text-sm">{errorMessage}</p>
+            <h2 className="text-xl font-bold text-text_primary">Something went wrong</h2>
+            <p className="text-text-secondary text-sm">{errorMessage}</p>
             <button 
               onClick={() => window.location.reload()}
-              className="w-full py-3 bg-primary text-white rounded-xl font-bold hover:scale-105 transition-all shadow-lg glow-primary"
+              className="w-full py-3 bg-primary text-black rounded-xl font-bold hover:scale-105 transition-all shadow-lg"
             >
               Reload Application
             </button>

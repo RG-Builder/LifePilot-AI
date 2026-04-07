@@ -126,7 +126,7 @@ async function startServer() {
         streak INTEGER DEFAULT 0,
         deadline DATETIME,
         category TEXT DEFAULT 'general',
-        last_completed_at DATETIME,
+        completed_at DATETIME,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id)
       );
@@ -694,7 +694,7 @@ async function startServer() {
 
   app.get("/api/ai/next-action", verifyFirebaseToken, async (req: any, res) => {
     const userId = req.user.id;
-    const tasks = db.prepare("SELECT * FROM tasks WHERE user_id = ? AND status = 'pending'").all(userId) as any[];
+    const tasks = db.prepare("SELECT * FROM tasks WHERE user_id = ? AND (status = 'pending' OR status = 'overdue')").all(userId) as any[];
     const profile = db.prepare("SELECT * FROM user_profiles WHERE user_id = ?").get(userId) as any;
     
     if (tasks.length === 0) return res.json({ message: "No pending tasks. Time to set a new goal?" });
@@ -705,6 +705,8 @@ async function startServer() {
     // Decision Engine Logic
     const scoredTasks = tasks.map(task => {
       let score = (task.importance || 5) * 2 + (task.urgency_score || 5) * 1.5 + (task.impact_level || 5) * 2;
+      
+      if (task.status === 'overdue') score += 100; // Overdue tasks are top priority
       
       // Energy Fit
       if (profile) {
@@ -720,8 +722,8 @@ async function startServer() {
       if (task.deadline) {
         const deadline = new Date(task.deadline);
         const hoursLeft = (deadline.getTime() - now.getTime()) / (1000 * 3600);
-        if (hoursLeft < 24) score += 20;
-        if (hoursLeft < 4) score += 50;
+        if (hoursLeft < 24 && hoursLeft > 0) score += 20;
+        if (hoursLeft < 4 && hoursLeft > 0) score += 50;
       }
       
       return { ...task, score };
@@ -734,7 +736,34 @@ async function startServer() {
 
   app.get("/api/ai/insights", verifyFirebaseToken, (req: any, res) => {
     const userId = req.user.id;
-    const insights = db.prepare("SELECT * FROM ai_insights WHERE user_id = ? ORDER BY created_at DESC LIMIT 5").all(userId);
+    
+    // Analyze patterns
+    const tasks = db.prepare("SELECT * FROM tasks WHERE user_id = ?").all(userId) as any[];
+    const completedToday = tasks.filter(t => t.status === 'completed' && t.completed_at && new Date(t.completed_at).toDateString() === new Date().toDateString()).length;
+    const pendingHighPriority = tasks.filter(t => t.status === 'pending' && t.importance >= 8).length;
+    
+    let insight = "Analyzing your performance patterns... stay focused.";
+    
+    if (completedToday > 3) {
+      insight = "Your productivity is peaking today! Keep this momentum.";
+    } else if (pendingHighPriority > 2) {
+      insight = "You are skipping high-priority missions. Focus on the critical path.";
+    } else if (tasks.length > 0) {
+      const completionRate = tasks.filter(t => t.status === 'completed').length / tasks.length;
+      if (completionRate > 0.7) {
+        insight = "Your completion rate is excellent. You're mastering your routine.";
+      } else {
+        insight = "Consistency is key. Try breaking down larger missions.";
+      }
+    }
+
+    // Save insight if it's new or different from the last one
+    const lastInsight = db.prepare("SELECT * FROM ai_insights WHERE user_id = ? ORDER BY created_at DESC LIMIT 1").get(userId) as any;
+    if (!lastInsight || lastInsight.insight_text !== insight) {
+      db.prepare("INSERT INTO ai_insights (user_id, insight_text, type) VALUES (?, ?, ?)").run(userId, insight, 'productivity');
+    }
+
+    const insights = db.prepare("SELECT * FROM ai_insights WHERE user_id = ? ORDER BY created_at DESC LIMIT 1").all(userId);
     res.json(insights);
   });
 
@@ -919,6 +948,15 @@ async function startServer() {
 
   app.get("/api/tasks", verifyFirebaseToken, (req: any, res) => {
     const userId = req.user.id;
+    const now = new Date().toISOString();
+    
+    // Update status to 'overdue' for pending tasks whose deadline has passed
+    db.prepare(`
+      UPDATE tasks 
+      SET status = 'overdue' 
+      WHERE user_id = ? AND status = 'pending' AND deadline < ?
+    `).run(userId, now);
+
     const tasks = db.prepare("SELECT * FROM tasks WHERE user_id = ? ORDER BY status ASC, importance DESC").all(userId);
     res.json(tasks);
   });
@@ -931,35 +969,18 @@ async function startServer() {
     if (!task) return res.status(404).json({ error: "Task not found" });
 
     const newStatus = task.status === 'completed' ? 'pending' : 'completed';
-    let newStreak = task.streak || 0;
-    const now = new Date();
+    const now = new Date().toISOString();
     
     if (newStatus === 'completed') {
-      if (task.is_habit) {
-        const lastCompleted = task.last_completed_at ? new Date(task.last_completed_at) : null;
-        if (lastCompleted) {
-          const diffDays = Math.floor((now.getTime() - lastCompleted.getTime()) / (1000 * 3600 * 24));
-          if (diffDays === 1) {
-            newStreak += 1;
-          } else if (diffDays > 1) {
-            newStreak = 1;
-          }
-        } else {
-          newStreak = 1;
-        }
-        
-        const stmt = db.prepare("UPDATE tasks SET status = 'completed', streak = ?, last_completed_at = ? WHERE id = ? AND user_id = ?");
-        stmt.run(newStreak, now.toISOString(), id, userId);
-      } else {
-        const stmt = db.prepare("UPDATE tasks SET status = 'completed', last_completed_at = ? WHERE id = ? AND user_id = ?");
-        stmt.run(now.toISOString(), id, userId);
-      }
+      const stmt = db.prepare("UPDATE tasks SET status = 'completed', completed_at = ? WHERE id = ? AND user_id = ?");
+      stmt.run(now, id, userId);
     } else {
-      const stmt = db.prepare("UPDATE tasks SET status = 'pending' WHERE id = ? AND user_id = ?");
+      const stmt = db.prepare("UPDATE tasks SET status = 'pending', completed_at = NULL WHERE id = ? AND user_id = ?");
       stmt.run(id, userId);
     }
     
-    res.json({ success: true, status: newStatus, streak: newStreak });
+    const updatedTask = db.prepare("SELECT * FROM tasks WHERE id = ?").get(id);
+    res.json(updatedTask);
   });
 
   // Habit Endpoints

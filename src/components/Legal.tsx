@@ -12,20 +12,20 @@ export const PrivacyPolicy: React.FC<LegalProps> = ({ onClose }) => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 20 }}
-      className="fixed inset-0 z-[200] bg-bg-dark p-0 overflow-y-auto"
+      className="fixed inset-0 z-[200] bg-background p-0 overflow-y-auto"
     >
       {/* Sticky Header */}
-      <div className="sticky top-0 z-10 bg-bg-dark/80 backdrop-blur-xl border-b border-white/10 px-6 py-4">
+      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-xl border-b border-border px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="size-10 rounded-xl bg-primary/20 flex items-center justify-center text-primary">
               <ShieldCheck size={20} />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">Privacy Policy</h1>
+            <h1 className="text-xl font-bold tracking-tight text-text_primary">Privacy Policy</h1>
           </div>
           <button 
             onClick={onClose} 
-            className="size-10 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-all"
+            className="size-10 rounded-full bg-surface hover:bg-surface/80 flex items-center justify-center text-text-secondary hover:text-text_primary transition-all"
             aria-label="Close"
           >
             <X size={20} />
@@ -34,15 +34,15 @@ export const PrivacyPolicy: React.FC<LegalProps> = ({ onClose }) => {
       </div>
 
       <div className="max-w-3xl mx-auto px-6 py-12 space-y-12">
-        <div className="prose prose-invert max-w-none text-slate-400 space-y-8">
+        <div className="prose prose-invert max-w-none text-text-secondary space-y-8">
           <div className="bg-primary/5 border border-primary/10 rounded-2xl p-6">
             <p className="text-sm font-medium text-primary">Last Updated: March 13, 2026</p>
-            <p className="mt-2">This Privacy Policy describes how LifePilot AI collects, uses, and protects your personal information when you use our services.</p>
+            <p className="mt-2 text-text_primary">This Privacy Policy describes how LifePilot AI collects, uses, and protects your personal information when you use our services.</p>
           </div>
           
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">01</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">01</span>
               Information We Collect
             </h2>
             <div className="pl-11">
@@ -51,8 +51,8 @@ export const PrivacyPolicy: React.FC<LegalProps> = ({ onClose }) => {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">02</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">02</span>
               How We Use Your Information
             </h2>
             <div className="pl-11">
@@ -61,8 +61,8 @@ export const PrivacyPolicy: React.FC<LegalProps> = ({ onClose }) => {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">03</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">03</span>
               Data Security
             </h2>
             <div className="pl-11">
@@ -71,8 +71,8 @@ export const PrivacyPolicy: React.FC<LegalProps> = ({ onClose }) => {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">04</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">04</span>
               Your Rights
             </h2>
             <div className="pl-11">
@@ -81,10 +81,10 @@ export const PrivacyPolicy: React.FC<LegalProps> = ({ onClose }) => {
           </section>
         </div>
 
-        <div className="pt-12 border-t border-white/5 text-center">
+        <div className="pt-12 border-t border-border text-center">
           <button 
             onClick={onClose}
-            className="px-8 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-opacity"
+            className="px-8 py-3 bg-primary text-black rounded-xl font-bold hover:opacity-90 transition-opacity"
           >
             I Understand
           </button>
@@ -100,20 +100,20 @@ export const TermsOfService: React.FC<LegalProps> = ({ onClose }) => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 20 }}
-      className="fixed inset-0 z-[200] bg-bg-dark p-0 overflow-y-auto"
+      className="fixed inset-0 z-[200] bg-background p-0 overflow-y-auto"
     >
       {/* Sticky Header */}
-      <div className="sticky top-0 z-10 bg-bg-dark/80 backdrop-blur-xl border-b border-white/10 px-6 py-4">
+      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-xl border-b border-border px-6 py-4">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="size-10 rounded-xl bg-primary/20 flex items-center justify-center text-primary">
               <ShieldCheck size={20} />
             </div>
-            <h1 className="text-xl font-bold tracking-tight">Terms of Service</h1>
+            <h1 className="text-xl font-bold tracking-tight text-text_primary">Terms of Service</h1>
           </div>
           <button 
             onClick={onClose} 
-            className="size-10 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-slate-400 hover:text-white transition-all"
+            className="size-10 rounded-full bg-surface hover:bg-surface/80 flex items-center justify-center text-text-secondary hover:text-text_primary transition-all"
             aria-label="Close"
           >
             <X size={20} />
@@ -122,15 +122,15 @@ export const TermsOfService: React.FC<LegalProps> = ({ onClose }) => {
       </div>
 
       <div className="max-w-3xl mx-auto px-6 py-12 space-y-12">
-        <div className="prose prose-invert max-w-none text-slate-400 space-y-8">
+        <div className="prose prose-invert max-w-none text-text-secondary space-y-8">
           <div className="bg-primary/5 border border-primary/10 rounded-2xl p-6">
             <p className="text-sm font-medium text-primary">Last Updated: March 13, 2026</p>
-            <p className="mt-2">By accessing or using LifePilot AI, you agree to be bound by these Terms of Service.</p>
+            <p className="mt-2 text-text_primary">By accessing or using LifePilot AI, you agree to be bound by these Terms of Service.</p>
           </div>
           
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">01</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">01</span>
               Acceptance of Terms
             </h2>
             <div className="pl-11">
@@ -139,8 +139,8 @@ export const TermsOfService: React.FC<LegalProps> = ({ onClose }) => {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">02</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">02</span>
               Subscription and Payments
             </h2>
             <div className="pl-11">
@@ -149,8 +149,8 @@ export const TermsOfService: React.FC<LegalProps> = ({ onClose }) => {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">03</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">03</span>
               User Conduct
             </h2>
             <div className="pl-11">
@@ -159,8 +159,8 @@ export const TermsOfService: React.FC<LegalProps> = ({ onClose }) => {
           </section>
 
           <section className="space-y-4">
-            <h2 className="text-2xl font-bold text-white flex items-center gap-3">
-              <span className="size-8 rounded-lg bg-white/5 flex items-center justify-center text-sm font-mono text-slate-400">04</span>
+            <h2 className="text-2xl font-bold text-text_primary flex items-center gap-3">
+              <span className="size-8 rounded-lg bg-surface flex items-center justify-center text-sm font-mono text-text-secondary">04</span>
               Limitation of Liability
             </h2>
             <div className="pl-11">
@@ -169,10 +169,10 @@ export const TermsOfService: React.FC<LegalProps> = ({ onClose }) => {
           </section>
         </div>
 
-        <div className="pt-12 border-t border-white/5 text-center">
+        <div className="pt-12 border-t border-border text-center">
           <button 
             onClick={onClose}
-            className="px-8 py-3 bg-primary text-white rounded-xl font-bold hover:opacity-90 transition-opacity"
+            className="px-8 py-3 bg-primary text-black rounded-xl font-bold hover:opacity-90 transition-opacity"
           >
             I Agree
           </button>
