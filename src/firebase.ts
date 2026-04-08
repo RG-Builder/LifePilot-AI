@@ -6,6 +6,7 @@ import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 console.log("Firebase Client initialized for project:", firebaseConfig.projectId);
+export const firebaseConfigExport = firebaseConfig;
 export const auth = getAuth(app);
 
 // Set persistence explicitly to browserLocalPersistence
