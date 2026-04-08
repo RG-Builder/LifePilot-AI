@@ -218,15 +218,15 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [themeType, setThemeType] = useState<ThemeType>(() => {
-    const saved = localStorage.getItem('app-theme');
-    return (saved as ThemeType) || 'elite';
+    const saved = localStorage.getItem('app-theme') as ThemeType;
+    return (saved && themes[saved]) ? saved : 'elite';
   });
 
-  const theme = themes[themeType];
+  const theme = themes[themeType] || themes.elite;
 
   const getTextColor = (bgColor: string) => {
     // Simple heuristic for hex colors
-    if (!bgColor) return theme.colors.text_primary;
+    if (!bgColor || !theme?.colors) return theme?.colors?.text_primary || '#000000';
     if (bgColor.startsWith('#')) {
       const hex = bgColor.replace('#', '');
       const r = parseInt(hex.substring(0, 2), 16);
@@ -235,21 +235,29 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const brightness = (r * 299 + g * 587 + b * 114) / 1000;
       return brightness > 128 ? '#000000' : '#FFFFFF';
     }
-    return theme.colors.text_primary;
+    return theme?.colors?.text_primary || '#000000';
   };
 
   useEffect(() => {
+    if (!theme) return;
     localStorage.setItem('app-theme', themeType);
     const root = document.documentElement;
     
     // Apply tokens as CSS variables
-    Object.entries(theme.colors).forEach(([key, value]) => {
-      if (value) root.style.setProperty(`--color-${key}`, value as string);
-    });
+    if (theme.colors) {
+      Object.entries(theme.colors).forEach(([key, value]) => {
+        if (value) root.style.setProperty(`--color-${key}`, value as string);
+      });
+    }
     
-    root.style.setProperty('--font-sans', theme.typography.fontSans);
-    root.style.setProperty('--font-mono', theme.typography.fontMono);
-    root.style.setProperty('--border-radius', theme.spacing.borderRadius);
+    if (theme.typography) {
+      root.style.setProperty('--font-sans', theme.typography.fontSans);
+      root.style.setProperty('--font-mono', theme.typography.fontMono);
+    }
+    
+    if (theme.spacing) {
+      root.style.setProperty('--border-radius', theme.spacing.borderRadius);
+    }
     
     root.classList.remove('theme-elite', 'theme-simple', 'theme-minimal');
     root.classList.add(`theme-${themeType}`);

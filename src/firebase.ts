@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, setPersistence, browserLocalPersistence } from 'firebase/auth';
-import { initializeFirestore } from 'firebase/firestore';
+import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getAnalytics, isSupported } from 'firebase/analytics';
 import firebaseConfig from '../firebase-applet-config.json';
 
@@ -28,6 +28,19 @@ export const logEvent = async (eventName: string, eventParams?: any) => {
 export const db = initializeFirestore(app, {
   experimentalForceLongPolling: true,
 }, firebaseConfig.firestoreDatabaseId);
+
+async function testConnection() {
+  try {
+    await getDocFromServer(doc(db, 'test', 'connection'));
+    console.log("Firestore connection test successful.");
+  } catch (error) {
+    if(error instanceof Error && error.message.includes('the client is offline')) {
+      console.error("Please check your Firebase configuration. Firestore connection failed: client is offline.");
+    }
+    // Skip logging for other errors, as this is simply a connection test.
+  }
+}
+testConnection();
 
 export const googleProvider = new GoogleAuthProvider();
 

@@ -79,13 +79,41 @@ import {
   createUserWithEmailAndPassword, 
   signInWithPopup, 
   onAuthStateChanged, 
-  signOut
+  signOut,
+  User as FirebaseUser
 } from 'firebase/auth';
-import { doc, getDocFromServer } from 'firebase/firestore';
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  query, 
+  where, 
+  orderBy, 
+  limit, 
+  addDoc, 
+  serverTimestamp,
+  Timestamp,
+  getDocFromServer
+} from 'firebase/firestore';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { useCollection } from 'react-firebase-hooks/firestore';
+import { GoogleGenAI, Type } from "@google/genai";
 import { useTheme, ThemeType } from './theme';
+import { 
+  getMotivationState, 
+  updateDailyScore, 
+  checkStreaks, 
+  generateBehaviorInsight, 
+  handleRecoveryMode, 
+  logReminder,
+  MOTIVATION_MESSAGES,
+  MotivationState
+} from './services/motivationService';
 
 interface Mission {
-  id: number;
+  id: string;
   title: string;
   impact: 'low' | 'moderate' | 'high' | 'critical';
   urgency: number;
@@ -93,16 +121,29 @@ interface Mission {
   estimated_effort?: number;
   impact_level?: number;
   duration: number;
-  deadline?: string;
+  deadline?: any;
   is_habit: boolean;
   streak: number;
   status: 'pending' | 'completed' | 'overdue';
   category: string;
   startTime?: string;
   endTime?: string;
-  completed_at?: string;
-  created_at: string;
+  completed_at?: any;
+  created_at: any;
 }
+
+const toDate = (val: any): Date => {
+  if (!val) return new Date(0);
+  if (val instanceof Date) return val;
+  if (val.seconds) return new Date(val.seconds * 1000);
+  return new Date(val);
+};
+
+const isToday = (val: any): boolean => {
+  const d = toDate(val);
+  const now = new Date();
+  return d.toDateString() === now.toDateString();
+};
 
 interface LifeState {
   score: number;
@@ -126,7 +167,7 @@ interface Analytics {
 }
 
 interface Habit {
-  id: number;
+  id: string;
   title: string;
   description: string;
   frequency: 'daily' | 'weekly';
@@ -217,8 +258,8 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
       let displayMessage = "Something went wrong. Please try refreshing the page.";
       try {
         if (this.state.error?.message) {
-          const parsed = JSON.parse(this.state.error.message);
-          if (parsed.error && parsed.error.includes('insufficient permissions')) {
+          const msg = this.state.error.message;
+          if (msg.includes('insufficient permissions')) {
             displayMessage = "You don't have permission to perform this action. Please contact support if you believe this is an error.";
           }
         }
@@ -256,6 +297,7 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { hasError:
 
 export default function App() {
   const { theme, setTheme } = useTheme();
+  const [firebaseUser, authLoading, authError] = useAuthState(auth);
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('lifepilot_token'));
   const [isAuthReady, setIsAuthReady] = useState(false);
@@ -266,12 +308,24 @@ export default function App() {
   const [showPricing, setShowPricing] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
 
+  // Firestore Collections
+  const tasksRef = firebaseUser ? collection(db, 'users', firebaseUser.uid, 'tasks') : null;
+  const habitsRef = firebaseUser ? collection(db, 'users', firebaseUser.uid, 'habits') : null;
+  const goalsRef = firebaseUser ? collection(db, 'users', firebaseUser.uid, 'goals') : null;
+  const insightsRef = firebaseUser ? collection(db, 'users', firebaseUser.uid, 'ai_insights') : null;
+
+  const [dbTasks, tasksLoading, tasksError] = useCollection(tasksRef ? query(tasksRef, orderBy('created_at', 'desc')) : null);
+  const [dbHabits, habitsLoading, habitsError] = useCollection(habitsRef ? query(habitsRef, orderBy('created_at', 'desc')) : null);
+  const [dbGoals, goalsLoading, goalsError] = useCollection(goalsRef ? query(goalsRef, orderBy('created_at', 'desc')) : null);
+  const [dbInsights, insightsLoading, insightsError] = useCollection(insightsRef ? query(insightsRef, orderBy('created_at', 'desc'), limit(10)) : null);
+
   const [missions, setMissions] = useState<Mission[]>([]);
   const [nextAction, setNextAction] = useState<Mission | null>(null);
+  const [motivationQuote, setMotivationQuote] = useState("Your potential is limited only by your focus.");
   const [focusTask, setFocusTask] = useState<Mission | null>(null);
   const [aiInsights, setAiInsights] = useState<any[]>([]);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [goals, setGoals] = useState<any[]>([]);
+  const [goalsState, setGoalsState] = useState<any[]>([]);
   const [consistencySystem, setConsistencySystem] = useState<Habit[]>([]);
   const [timelineMatrix, setTimelineMatrix] = useState<Mission[]>([]);
   const [selfAwareness, setSelfAwareness] = useState<Analytics | null>(null);
@@ -283,6 +337,394 @@ export default function App() {
     hydration: 1450
   });
   const [habitStats, setHabitStats] = useState<HabitStat[]>([]);
+  const [motivationState, setMotivationState] = useState<MotivationState | null>(null);
+  const [dailyScore, setDailyScore] = useState<number>(0);
+  const [microReward, setMicroReward] = useState<string | null>(null);
+  const [activeReminder, setActiveReminder] = useState<string | null>(null);
+  const [lastInteractionTime, setLastInteractionTime] = useState<number>(Date.now());
+
+  // Sync Firestore data to state
+  useEffect(() => {
+    if (dbTasks) setMissions(dbTasks.docs.map(doc => ({ ...doc.data(), id: doc.id } as unknown as Mission)));
+    if (dbHabits) setConsistencySystem(dbHabits.docs.map(doc => ({ ...doc.data(), id: doc.id } as unknown as Habit)));
+    if (dbGoals) setGoalsState(dbGoals.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+    if (dbInsights) setAiInsights(dbInsights.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+  }, [dbTasks, dbHabits, dbGoals, dbInsights]);
+
+  // Fetch motivation state
+  useEffect(() => {
+    if (firebaseUser) {
+      getMotivationState(firebaseUser.uid).then(setMotivationState);
+    }
+  }, [firebaseUser]);
+
+  // Update streaks and score
+  useEffect(() => {
+    if (firebaseUser && missions.length > 0) {
+      checkStreaks(firebaseUser.uid, missions).then(streaks => {
+        if (motivationState) {
+          setMotivationState({ ...motivationState, ...streaks });
+        }
+      });
+      
+      const focusMins = selfAwareness?.focusTimeMinutes || 0;
+      updateDailyScore(firebaseUser.uid, missions, focusMins).then(setDailyScore);
+    }
+  }, [firebaseUser, missions, selfAwareness]);
+
+  // AI Insight Generation
+  useEffect(() => {
+    const generateInsight = async () => {
+      if (firebaseUser && Math.random() > 0.7) {
+        const insight = await generateBehaviorInsight(firebaseUser.uid);
+        if (insight) {
+          setMotivationQuote(insight);
+        }
+      }
+    };
+    generateInsight();
+  }, [firebaseUser]);
+
+  // Adaptive Reminders & Escalation Logic
+  useEffect(() => {
+    if (!firebaseUser || !nextAction) return;
+
+    const checkInactivity = async () => {
+      const now = Date.now();
+      const inactiveTime = now - lastInteractionTime;
+      
+      // Level 1: Gentle Reminder (10 mins inactivity)
+      if (inactiveTime > 600000 && inactiveTime < 610000) {
+        const msg = MOTIVATION_MESSAGES.ESCALATION[0].text;
+        setActiveReminder(msg);
+        logReminder(firebaseUser.uid, nextAction.id, 'start_now');
+      }
+      
+      // Level 2: Direct Action Prompt (20 mins inactivity)
+      if (inactiveTime > 1200000 && inactiveTime < 1210000) {
+        const msg = MOTIVATION_MESSAGES.ESCALATION[1].text;
+        setActiveReminder(msg);
+        logReminder(firebaseUser.uid, nextAction.id, 'start_now');
+      }
+      
+      // Level 3: Simplified Protocol (30 mins inactivity)
+      if (inactiveTime > 1800000 && inactiveTime < 1810000) {
+        const msg = MOTIVATION_MESSAGES.ESCALATION[2].text;
+        setActiveReminder(msg);
+        logReminder(firebaseUser.uid, nextAction.id, 'start_now');
+        
+        // Trigger Recovery Mode if not already active
+        handleRecoveryMode(firebaseUser.uid, 3).then(active => {
+          if (active && motivationState) {
+            setMotivationState({ ...motivationState, recovery_mode: true });
+          }
+        });
+      }
+    };
+
+    const interval = setInterval(checkInactivity, 10000); // Check every 10s
+    return () => clearInterval(interval);
+  }, [firebaseUser, nextAction, lastInteractionTime, motivationState]);
+
+  // Track interactions
+  useEffect(() => {
+    const handleInteraction = () => {
+      setLastInteractionTime(Date.now());
+      setActiveReminder(null);
+    };
+    window.addEventListener('mousedown', handleInteraction);
+    window.addEventListener('keydown', handleInteraction);
+    return () => {
+      window.removeEventListener('mousedown', handleInteraction);
+      window.removeEventListener('keydown', handleInteraction);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authLoading) {
+      setIsAuthReady(true);
+      if (firebaseUser) {
+        setUser({ id: 1, email: firebaseUser.email || '', plan: 'free' });
+        // Fetch profile
+        const userDoc = doc(db, 'users', firebaseUser.uid);
+        getDocFromServer(userDoc).then(snap => {
+          if (snap.exists()) {
+            setUserProfile(snap.data());
+          } else {
+            // Create profile if not exists
+            const initialProfile = {
+              firebase_uid: firebaseUser.uid,
+              email: firebaseUser.email,
+              subscription_plan: 'trial',
+              role: 'user',
+              created_at: serverTimestamp()
+            };
+            setDoc(userDoc, initialProfile).catch(err => {
+              handleFirestoreError(err, OperationType.CREATE, `users/${firebaseUser.uid}`);
+            });
+            setUserProfile(initialProfile);
+          }
+        }).catch(err => {
+          handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
+        });
+      } else {
+        setUser(null);
+      }
+    }
+  }, [firebaseUser, authLoading]);
+
+  useEffect(() => {
+    if (missions.length > 0) {
+      fetchNextAction();
+    }
+  }, [missions]);
+
+  useEffect(() => {
+    const quotes = [
+      "Your potential is limited only by your focus.",
+      "Discipline is the bridge between goals and accomplishment.",
+      "The only way to do great work is to love what you do.",
+      "Success is not final, failure is not fatal: it is the courage to continue that counts.",
+      "Don't watch the clock; do what it does. Keep going.",
+      "The future depends on what you do today.",
+      "Action is the foundational key to all success."
+    ];
+    setMotivationQuote(quotes[Math.floor(Math.random() * quotes.length)]);
+    
+    const interval = setInterval(() => {
+      setMotivationQuote(quotes[Math.floor(Math.random() * quotes.length)]);
+    }, 3600000); // Change quote every hour
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleAction = async (type: string, payload: any = {}) => {
+    if (!firebaseUser) {
+      setShowAuth(true);
+      return;
+    }
+
+    // Sanitize payload to remove undefined values which Firestore doesn't support
+    const sanitize = (obj: any) => {
+      const newObj: any = {};
+      const allowed = [
+        'id', 'title', 'importance', 'urgency_score', 'estimated_effort', 'impact_level', 
+        'duration', 'deadline', 'category', 'status', 'is_habit', 'streak', 
+        'completed_at', 'created_at', 'startTime', 'endTime', 'updated_at', 'data',
+        'firebase_uid', 'email', 'subscription_plan', 'role', 'trial_used',
+        'description', 'frequency', 'goal_count', 'current_count', 'last_completed_at',
+        'type', 'target_date', 'start_time', 'end_time', 'duration_minutes', 
+        'distractions_count', 'efficiency_score', 'insight_text', 'is_read'
+      ];
+      Object.keys(obj).forEach(key => {
+        if (allowed.includes(key) && obj[key] !== undefined) {
+          newObj[key] = obj[key];
+        }
+      });
+      return newObj;
+    };
+
+    const cleanPayload = sanitize(payload);
+
+    try {
+      switch (type) {
+        case 'ADD_TASK': {
+          if (!tasksRef) return;
+          try {
+            await addDoc(tasksRef, {
+              ...cleanPayload,
+              user_id: firebaseUser.uid,
+              status: 'pending',
+              created_at: serverTimestamp(),
+              streak: 0,
+              is_habit: cleanPayload.is_habit || false
+            });
+            confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
+          } catch (err) {
+            handleFirestoreError(err, OperationType.CREATE, 'tasks');
+          }
+          break;
+        }
+        case 'COMPLETE_TASK': {
+          if (!tasksRef) return;
+          try {
+            const taskDoc = doc(tasksRef, cleanPayload.id);
+            await updateDoc(taskDoc, {
+              status: 'completed',
+              completed_at: serverTimestamp(),
+              streak: (cleanPayload.streak || 0) + 1
+            });
+            
+            // Motivation Engine Integration
+            if (firebaseUser) {
+              const focusMins = selfAwareness?.focusTimeMinutes || 0;
+              const newScore = await updateDailyScore(firebaseUser.uid, missions, focusMins);
+              setDailyScore(newScore);
+              
+              // Micro-reward
+              const msg = MOTIVATION_MESSAGES.REWARDS[Math.floor(Math.random() * MOTIVATION_MESSAGES.REWARDS.length)];
+              setMicroReward(msg);
+              setTimeout(() => setMicroReward(null), 3000);
+
+              // Recovery mode check
+              if (motivationState?.recovery_mode) {
+                const stateDoc = doc(db, 'users', firebaseUser.uid, 'motivation', 'state');
+                const newCompletions = motivationState.recovery_completions + 1;
+                if (newCompletions >= 2) {
+                  await updateDoc(stateDoc, { recovery_mode: false, recovery_completions: 0 });
+                  setMotivationState({ ...motivationState, recovery_mode: false, recovery_completions: 0 });
+                } else {
+                  await updateDoc(stateDoc, { recovery_completions: newCompletions });
+                  setMotivationState({ ...motivationState, recovery_completions: newCompletions });
+                }
+              }
+            }
+
+            confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+          } catch (err) {
+            handleFirestoreError(err, OperationType.UPDATE, `tasks/${cleanPayload.id}`);
+          }
+          break;
+        }
+        case 'UPDATE_TASK': {
+          if (!tasksRef) return;
+          const taskDoc = doc(tasksRef, cleanPayload.id);
+          await updateDoc(taskDoc, {
+            ...sanitize(cleanPayload.data || {}),
+            updated_at: serverTimestamp()
+          });
+          break;
+        }
+        case 'DELETE_TASK': {
+          if (!tasksRef) return;
+          await deleteDoc(doc(tasksRef, cleanPayload.id));
+          break;
+        }
+        case 'PILOT_MY_DAY': {
+          await generateDayPlan();
+          break;
+        }
+        case 'GENERATE_INSIGHTS': {
+          await generateAiInsights();
+          break;
+        }
+        case 'START_FOCUS': {
+          setFocusTask(cleanPayload.task);
+          break;
+        }
+        case 'STOP_FOCUS': {
+          setFocusTask(null);
+          break;
+        }
+        case 'TOGGLE_HABIT': {
+          if (!habitsRef) return;
+          const habitDoc = doc(habitsRef, cleanPayload.id);
+          await updateDoc(habitDoc, {
+            current_count: (cleanPayload.current_count || 0) + 1,
+            last_completed_at: serverTimestamp(),
+            streak: (cleanPayload.streak || 0) + 1
+          });
+          confetti({ particleCount: 40, spread: 50, origin: { y: 0.7 } });
+          break;
+        }
+        case 'ADD_HABIT': {
+          if (!habitsRef) return;
+          await addDoc(habitsRef, {
+            ...cleanPayload,
+            user_id: firebaseUser.uid,
+            current_count: 0,
+            streak: 0,
+            created_at: serverTimestamp()
+          });
+          break;
+        }
+        case 'DELETE_HABIT': {
+          if (!habitsRef) return;
+          await deleteDoc(doc(habitsRef, cleanPayload.id));
+          break;
+        }
+        case 'UPDATE_HABIT': {
+          if (!habitsRef) return;
+          const habitDoc = doc(habitsRef, cleanPayload.id);
+          await updateDoc(habitDoc, {
+            ...cleanPayload,
+            updated_at: serverTimestamp()
+          });
+          break;
+        }
+        default:
+          console.warn(`Unhandled action type: ${type}`);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, type);
+    }
+  };
+
+  const generateDayPlan = async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const prompt = `As an AI Life Architect, analyze these tasks and create a high-performance schedule for today.
+    Tasks: ${JSON.stringify(missions)}
+    User Profile: ${JSON.stringify(userProfile)}
+    Return a JSON array of tasks with suggested start and end times.`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      const plan = JSON.parse(response.text);
+      // Update tasks with times in Firestore
+      if (tasksRef && Array.isArray(plan)) {
+        for (const item of plan) {
+          const existing = missions.find(m => m.title === item.title);
+          if (existing && item.startTime && item.endTime) {
+            try {
+              const updateData: any = {
+                updated_at: serverTimestamp()
+              };
+              if (item.startTime) updateData.startTime = String(item.startTime);
+              if (item.endTime) updateData.endTime = String(item.endTime);
+              
+              await updateDoc(doc(tasksRef, existing.id), updateData);
+            } catch (err) {
+              console.error(`Failed to update task ${existing.id}:`, err);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("AI Day Planning failed:", err);
+    }
+  };
+
+  const generateAiInsights = async () => {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const prompt = `Analyze user performance data and provide 3 actionable, high-impact insights.
+    Data: ${JSON.stringify({ missions, consistencySystem, lifeState })}
+    Return a JSON array of objects with { insight_text, type }.`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: { responseMimeType: "application/json" }
+      });
+      const insights = JSON.parse(response.text);
+      if (insightsRef && Array.isArray(insights)) {
+        for (const insight of insights) {
+          await addDoc(insightsRef, {
+            ...insight,
+            user_id: firebaseUser?.uid,
+            is_read: false,
+            created_at: serverTimestamp()
+          });
+        }
+      }
+    } catch (err) {
+      console.error("AI Insight generation failed:", err);
+    }
+  };
 
   const getFreshToken = async () => {
     if (!auth.currentUser) return null;
@@ -338,6 +780,17 @@ export default function App() {
   };
 
   const [editingMission, setEditingMission] = useState<Mission | null>(null);
+
+  const startEdit = (mission: Mission) => {
+    setEditingMission(mission);
+    setTitle(mission.title);
+    setUrgencyScore(mission.urgency_score || 5);
+    setEstimatedEffort(mission.estimated_effort || 3);
+    setImpactLevel(mission.impact_level || 5);
+    setDuration(mission.duration || 30);
+    setDeadline(mission.deadline ? toDate(mission.deadline).toISOString().slice(0, 16) : '');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
   
   const [title, setTitle] = useState('');
   const [impact, setImpact] = useState<'low' | 'moderate' | 'high' | 'critical'>('moderate');
@@ -390,7 +843,6 @@ export default function App() {
     if (isAuthReady && token) fetchUsage();
   }, [token, isAuthReady]);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
-  const [motivationQuote, setMotivationQuote] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'home' | 'tasks' | 'schedule' | 'habits' | 'analytics' | 'settings'>('home');
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -411,6 +863,7 @@ export default function App() {
   });
   const [lastAiCall, setLastAiCall] = useState(0);
   const [showAiPanel, setShowAiPanel] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const renderOnboarding = () => {
     if (theme.id === 'simple') {
@@ -1050,17 +1503,7 @@ export default function App() {
 
   useEffect(() => {
     if (isAuthReady) {
-      if (token) {
-        refreshUser();
-        fetchMissions();
-        fetchSelfAwareness();
-        fetchConsistencySystem();
-        fetchHabitStats();
-        fetchUserProfile();
-        fetchGoals();
-        fetchNextAction();
-        fetchAiInsights();
-      } else {
+      if (!firebaseUser) {
         setShowAuth(true);
       }
     }
@@ -1069,7 +1512,7 @@ export default function App() {
     if ("Notification" in window) {
       Notification.requestPermission();
     }
-  }, [token, isAuthReady]);
+  }, [firebaseUser, isAuthReady]);
 
   // Notification Reminder Logic
   useEffect(() => {
@@ -1091,7 +1534,7 @@ export default function App() {
         
         // Deadline approaching alert (1 hour before)
         if (task.deadline) {
-          const deadlineDate = new Date(task.deadline);
+          const deadlineDate = toDate(task.deadline);
           const diffMs = deadlineDate.getTime() - now.getTime();
           const diffMins = Math.floor(diffMs / 60000);
           
@@ -1131,7 +1574,7 @@ export default function App() {
     setShowOnboarding(false);
     
     // Add a default mission based on onboarding selection if no missions exist
-    if (missions.length === 0 && token) {
+    if (missions.length === 0 && firebaseUser) {
       try {
         const missionTitles: Record<string, string> = {
           focus: 'Deep Focus Protocol',
@@ -1145,21 +1588,16 @@ export default function App() {
         
         const title = missionTitles[onboardingData.mission] || missionTitles[onboardingData.directive] || 'Initial Calibration';
         
-        await apiFetch('/api/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title,
-            importance: 'high',
-            impact_level: 'high',
-            urgency_score: 5,
-            estimated_effort: 60,
-            duration: 60,
-            is_habit: onboardingData.mission === 'habits',
-            category: onboardingData.mission === 'physical' ? 'health' : 'work'
-          })
+        await handleAction('ADD_TASK', {
+          title,
+          importance: 8,
+          impact_level: 8,
+          urgency_score: 5,
+          estimated_effort: 3,
+          duration: 60,
+          is_habit: onboardingData.mission === 'habits',
+          category: onboardingData.mission === 'physical' ? 'health' : 'work'
         });
-        await fetchMissions();
         generateSchedule();
       } catch (e) {
         console.error("Failed to create default mission:", e);
@@ -1220,6 +1658,24 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  const resetForm = () => {
+    setTitle('');
+    setUrgencyScore(5);
+    setEstimatedEffort(3);
+    setImpactLevel(5);
+    setDuration(30);
+    setDeadline('');
+    setEditingMission(null);
+  };
+
+  const resetHabitForm = () => {
+    setHabitTitle('');
+    setHabitDesc('');
+    setHabitFreq('daily');
+    setHabitGoal(1);
+    setEditingHabit(null);
+  };
+
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -1277,56 +1733,76 @@ export default function App() {
     }
   };
 
-  const LifeStateEngine = () => (
-    <div className="flex flex-col items-center py-8 sm:py-12">
-      <div className="diamond-container mb-8 sm:mb-12">
-        {/* Outer Glows */}
-        {theme.id === 'elite' && (
-          <>
-            <div className="diamond-glow scale-110 opacity-50" />
-            <div className="diamond-glow scale-125 opacity-20" />
-          </>
-        )}
-        
-        {/* Main Shape */}
-        <div className={`absolute inset-0 border-2 border-primary/30 ${theme.id === 'elite' ? 'rotate-45 rounded-xl' : theme.id === 'simple' ? 'rounded-full' : 'rounded-lg'} transition-all duration-500`} 
-             style={{ background: theme.id === 'elite' ? 'radial-gradient(circle at center, rgba(var(--color-primary-rgb, 0, 242, 255), 0.1), transparent)' : 'transparent' }} />
-        
-        {/* Accents */}
-        {theme.id === 'elite' && (
-          <>
-            <div className="diamond-accent top-0 left-1/2 -translate-x-1/2 -translate-y-1/2" />
-            <div className="diamond-accent bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2" />
-            <div className="diamond-accent left-0 top-1/2 -translate-y-1/2 -translate-x-1/2" />
-            <div className="diamond-accent right-0 top-1/2 -translate-y-1/2 translate-x-1/2" />
-          </>
-        )}
+  const LifeStateEngine = () => {
+    const todayMissions = missions.filter(m => 
+      isToday(m.created_at) || 
+      (m.deadline && isToday(m.deadline)) || 
+      (m.completed_at && isToday(m.completed_at))
+    );
+    const completedToday = todayMissions.filter(m => m.status === 'completed' && m.completed_at && isToday(m.completed_at)).length;
+    const totalToday = todayMissions.length;
+    const efficiency = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
+    
+    // Motivation Engine Score
+    const displayScore = dailyScore || efficiency;
 
-        {/* Content */}
-        <div className="relative z-10 flex flex-col items-center">
-          <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/60 mb-1">{theme.wording.efficiency}</span>
-          <div className="flex items-baseline">
-            <span className={`text-5xl sm:text-7xl font-black tracking-tighter text-text_primary`}>{lifeState.score}</span>
-            <span className="text-xl sm:text-2xl font-bold text-primary/60 ml-1">%</span>
+    return (
+      <div className="flex flex-col items-center py-8 sm:py-12">
+        <div className="diamond-container mb-8 sm:mb-12">
+          {/* Outer Glows */}
+          <div className={`diamond-glow scale-110 opacity-50 ${displayScore > 80 ? 'bg-success' : displayScore > 50 ? 'bg-primary' : 'bg-danger'}`} />
+          
+          {/* Main Shape */}
+          <div className={`absolute inset-0 border-2 border-primary/30 ${theme.id === 'elite' ? 'rotate-45 rounded-xl' : theme.id === 'simple' ? 'rounded-full' : 'rounded-lg'} transition-all duration-500`} 
+               style={{ background: theme.id === 'elite' ? 'radial-gradient(circle at center, rgba(var(--color-primary-rgb, 0, 242, 255), 0.1), transparent)' : 'transparent' }} />
+          
+          {/* Content */}
+          <div className="relative z-10 flex flex-col items-center">
+            <span className="text-[10px] font-black uppercase tracking-[0.3em] text-primary/60 mb-1">Daily Drive</span>
+            <div className="flex items-baseline">
+              <span className={`text-5xl sm:text-7xl font-black tracking-tighter text-text_primary`}>{displayScore}</span>
+              <span className="text-xl sm:text-2xl font-bold text-primary/60 ml-1">%</span>
+            </div>
+            <div className="mt-2 flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full border border-primary/20">
+              <div className={`size-1.5 bg-primary rounded-full ${theme.animations.type !== 'minimal' ? 'animate-pulse' : ''}`} />
+              <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
+                {motivationState?.recovery_mode ? 'Recovery Mode' : displayScore > 80 ? 'Optimal' : displayScore > 50 ? 'Stable' : 'Low Power'}
+              </span>
+            </div>
           </div>
-          <div className="mt-2 flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full border border-primary/20">
-            <div className={`size-1.5 bg-primary rounded-full ${theme.animations.type !== 'minimal' ? 'animate-pulse' : ''}`} />
-            <span className="text-[10px] font-bold uppercase tracking-widest text-primary">Optimal</span>
+        </div>
+
+        <div className="w-full max-w-xs text-center space-y-4">
+          <div className="flex items-center justify-center gap-6">
+            <div className="flex flex-col items-center">
+              <div className="flex items-center gap-1 text-secondary">
+                <Flame size={16} fill="currentColor" />
+                <span className="text-lg font-black">{motivationState?.current_streak || 0}</span>
+              </div>
+              <span className="text-[8px] font-black uppercase tracking-widest text-text_secondary">Streak</span>
+            </div>
+            <div className="flex flex-col items-center">
+              <div className="flex items-center gap-1 text-primary">
+                <Zap size={16} fill="currentColor" />
+                <span className="text-lg font-black">{motivationState?.focus_streak || 0}</span>
+              </div>
+              <span className="text-[8px] font-black uppercase tracking-widest text-text_secondary">Focus</span>
+            </div>
+          </div>
+          
+          <div className="space-y-2">
+            <div className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text_secondary">
+              <Brain className="size-3 text-primary" />
+              Neural Insight
+            </div>
+            <p className="text-sm font-medium text-text_primary leading-relaxed">
+              {motivationQuote}
+            </p>
           </div>
         </div>
       </div>
-
-      <div className="w-full max-w-xs text-center space-y-2">
-        <div className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-text_secondary">
-          <Zap className="size-3 text-primary" />
-          {theme.wording.insight}
-        </div>
-        <p className="text-sm font-medium text-text_primary leading-relaxed">
-          {lifeState.insight}
-        </p>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const MissionCard: React.FC<{ mission: Mission }> = ({ mission }) => {
     const impactColor = mission.impact === 'critical' ? 'text-danger' : mission.impact === 'high' ? 'text-primary' : 'text-secondary';
@@ -1337,7 +1813,7 @@ export default function App() {
     const handleDelete = (e: React.MouseEvent) => {
       e.stopPropagation();
       if (confirmDelete) {
-        deleteTask(mission.id);
+        handleAction('DELETE_TASK', { id: mission.id });
       } else {
         setConfirmDelete(true);
         setTimeout(() => setConfirmDelete(false), 3000);
@@ -1347,9 +1823,10 @@ export default function App() {
     return (
       <motion.div 
         layout
+        whileHover={{ scale: 1.01, borderColor: 'var(--color-primary)' }}
         initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 20 } : { opacity: 1 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`stitch-card p-4 sm:p-6 group relative overflow-hidden transition-all ${mission.status === 'completed' ? 'opacity-60 grayscale-[0.5]' : ''}`}
+        className={`stitch-card p-4 sm:p-6 group relative overflow-hidden transition-all border-transparent hover:border-primary/30 ${mission.status === 'completed' ? 'opacity-60 grayscale-[0.5]' : ''}`}
       >
         <div className="flex justify-between items-start mb-4">
           <div className="space-y-1">
@@ -1389,7 +1866,7 @@ export default function App() {
             <div className={`flex items-center gap-1.5 ${mission.status === 'overdue' ? 'text-danger' : 'text-text_secondary'}`}>
               <Clock size={14} />
               <span className="text-xs font-medium">
-                {new Date(mission.deadline).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                {toDate(mission.deadline).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
           )}
@@ -1397,19 +1874,28 @@ export default function App() {
             <div className="flex items-center gap-1.5 text-success">
               <CheckCircle2 size={14} />
               <span className="text-xs font-medium">
-                Completed {new Date(mission.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                Completed {toDate(mission.completed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
           )}
         </div>
 
-        <button 
-          onClick={() => toggleDone(mission.id)}
-          className={`${buttonClass} w-full flex items-center justify-center gap-2`}
-        >
-          {mission.status === 'completed' ? 'Restore Mission' : theme.wording.execute}
-          {mission.status === 'completed' ? <RotateCcw size={18} /> : <ArrowRight size={18} />}
-        </button>
+          <div className="flex items-center gap-2">
+            {mission.status !== 'completed' && (
+              <button 
+                onClick={() => handleAction('COMPLETE_TASK', { id: mission.id, streak: mission.streak })}
+                className="size-10 md:size-12 rounded-xl md:rounded-2xl bg-primary/10 text-primary flex items-center justify-center hover:bg-primary hover:text-white transition-all"
+              >
+                <CheckCircle2 size={20} />
+              </button>
+            )}
+            <button 
+              onClick={() => handleAction('START_FOCUS', { task: mission })}
+              className="size-11 rounded-xl bg-surface border border-border text-text_secondary flex items-center justify-center hover:text-primary hover:border-primary/30 transition-all"
+            >
+              <Zap size={18} />
+            </button>
+          </div>
       </motion.div>
     );
   };
@@ -1590,6 +2076,52 @@ export default function App() {
     </motion.div>
   );
 
+  const getGrowthData = () => {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const today = new Date();
+    const last7Days = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setDate(today.getDate() - (6 - i));
+      return d;
+    });
+
+    return last7Days.map(date => {
+      const dayName = days[date.getDay()];
+      const dayMissions = missions.filter(m => {
+        const missionDate = toDate(m.created_at);
+        return missionDate.toDateString() === date.toDateString();
+      });
+      
+      const completedCount = missions.filter(m => 
+        m.status === 'completed' && 
+        m.completed_at && 
+        toDate(m.completed_at).toDateString() === date.toDateString()
+      ).length;
+      
+      // Calculate a score based on completion rate and impact
+      const totalImpact = dayMissions.reduce((acc, m) => acc + (m.impact_level || 5), 0);
+      const completedImpact = missions.filter(m => 
+        m.status === 'completed' && 
+        m.completed_at && 
+        toDate(m.completed_at).toDateString() === date.toDateString()
+      ).reduce((acc, m) => acc + (m.impact_level || 5), 0);
+
+      const score = dayMissions.length > 0 ? Math.round((completedImpact / totalImpact) * 100) : 0;
+      return { day: dayName, score: Math.max(score, completedCount > 0 ? 20 : 0) };
+    });
+  };
+
+  const getConsistencyPulse = () => {
+    if (consistencySystem.length === 0) return Array.from({ length: 12 }, () => 20);
+    
+    const base = (consistencySystem.reduce((acc, h) => acc + (h.current_count / h.goal_count), 0) / consistencySystem.length) * 100;
+    
+    return Array.from({ length: 12 }, (_, i) => {
+      const noise = Math.sin(i + Date.now() / 100000) * 10;
+      return Math.max(20, Math.min(100, base + noise));
+    });
+  };
+
   const renderHabits = () => (
     <motion.div 
       key="habits"
@@ -1643,17 +2175,17 @@ export default function App() {
               
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => completeHabit(habit.id)}
+                  onClick={() => handleAction('TOGGLE_HABIT', { id: habit.id, current_count: habit.current_count, streak: habit.streak })}
                   className={`size-10 rounded-xl flex items-center justify-center transition-all ${habit.current_count >= habit.goal_count ? 'bg-success/20 text-success cursor-default' : 'bg-primary text-black hover:scale-110 shadow-lg shadow-primary/20'}`}
                   disabled={habit.current_count >= habit.goal_count}
                 >
                   <Check size={20} strokeWidth={3} />
                 </button>
                 <button 
-                  onClick={() => editHabit(habit)}
-                  className="size-10 rounded-xl bg-surface border border-border flex items-center justify-center text-text_secondary hover:text-text_primary transition-all"
+                  onClick={() => handleAction('DELETE_HABIT', { id: habit.id })}
+                  className="size-10 rounded-xl bg-surface border border-border flex items-center justify-center text-text_secondary hover:text-danger transition-all"
                 >
-                  <Settings size={18} />
+                  <Trash2 size={18} />
                 </button>
               </div>
             </div>
@@ -1730,7 +2262,7 @@ export default function App() {
                   <h4 className={`text-xl sm:text-2xl font-black tracking-tight ${mission.status === 'completed' ? 'text-text_secondary line-through' : 'text-text_primary'}`}>{mission.title}</h4>
                 </div>
                 <button 
-                  onClick={() => toggleDone(mission.id)}
+                  onClick={() => handleAction('COMPLETE_TASK', { id: mission.id, streak: mission.streak })}
                   className={`size-10 sm:size-12 rounded-xl sm:rounded-2xl flex items-center justify-center transition-all duration-300 ml-auto sm:ml-0 ${mission.status === 'completed' ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-surface text-text_secondary hover:text-text_primary hover:bg-primary hover:text-black'}`}
                 >
                   <CheckCircle2 size={20} />
@@ -1751,101 +2283,102 @@ export default function App() {
     </motion.div>
   );
 
-  const renderSelfAwareness = () => (
-    <motion.div 
-      key="analytics"
-      initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 10 } : { opacity: 1 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -10 }}
-      className="space-y-8 sm:space-y-12 pb-32"
-    >
-      <div className="space-y-2">
-        <h2 className={`text-3xl sm:text-5xl font-black tracking-tighter text-text_primary`}>{theme.wording.analytics}</h2>
-        <p className="text-text_secondary text-[10px] font-black uppercase tracking-[0.3em]">
-          {theme.id === 'elite' ? 'Neural Performance Analytics & Growth' : theme.id === 'simple' ? 'See how much you\'ve grown!' : 'Your performance metrics.'}
-        </p>
-      </div>
+  const renderSelfAwareness = () => {
+    const completedMissions = missions.filter(m => m.status === 'completed');
+    const totalMissions = missions.length;
+    const cognitiveEfficiency = totalMissions > 0 ? Math.round((completedMissions.length / totalMissions) * 100) : 0;
+    
+    const habitConsistency = consistencySystem.length > 0 ? 
+      Math.round((consistencySystem.reduce((acc, h) => acc + (h.current_count / h.goal_count), 0) / consistencySystem.length) * 100) : 0;
 
-      {/* Performance Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 sm:gap-8">
-        <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-border">
-          <div className="text-[10px] font-black text-text_secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Cognitive Efficiency' : 'Efficiency'}</div>
-          <div className="text-4xl sm:text-6xl font-black tracking-tighter text-primary">92%</div>
-          <div className="h-2 w-full bg-surface rounded-full overflow-hidden">
-            <div className="h-full bg-primary w-[92%] shadow-[0_0_10px_var(--color-primary)]" />
-          </div>
+    return (
+      <motion.div 
+        key="analytics"
+        initial={theme.animations.type !== 'minimal' ? { opacity: 0, y: 10 } : { opacity: 1 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -10 }}
+        className="space-y-8 sm:space-y-12 pb-32"
+      >
+        <div className="space-y-2">
+          <h2 className={`text-3xl sm:text-5xl font-black tracking-tighter text-text_primary`}>{theme.wording.analytics}</h2>
+          <p className="text-text_secondary text-[10px] font-black uppercase tracking-[0.3em]">
+            {theme.id === 'elite' ? 'Neural Performance Analytics & Growth' : theme.id === 'simple' ? 'See how much you\'ve grown!' : 'Your performance metrics.'}
+          </p>
         </div>
-        <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-border">
-          <div className="text-[10px] font-black text-text_secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Consistency Index' : 'Consistency'}</div>
-          <div className="text-4xl sm:text-6xl font-black tracking-tighter text-secondary">8.4</div>
-          <div className="h-2 w-full bg-surface rounded-full overflow-hidden">
-            <div className="h-full bg-secondary w-[84%] shadow-[0_0_10px_var(--color-secondary)]" />
-          </div>
-        </div>
-        <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-border">
-          <div className="text-[10px] font-black text-text_secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Focus Resilience' : 'Focus'}</div>
-          <div className="text-4xl sm:text-6xl font-black tracking-tighter text-primary">High</div>
-          <div className="flex gap-2">
-            {[1, 2, 3, 4, 5].map(i => (
-              <div key={i} className={`h-2 flex-1 rounded-full ${i <= 4 ? 'bg-primary shadow-[0_0_10px_var(--color-primary)]' : 'bg-surface'}`} />
-            ))}
-          </div>
-        </div>
-      </div>
 
-      {/* Growth Visualization */}
-      <div className="glass-card p-8 border-border space-y-6">
-        <div className="flex items-center justify-between">
-          <h3 className={`text-xl font-bold tracking-tight text-text_primary`}>{theme.id === 'elite' ? 'Growth Trajectory' : 'Your Progress'}</h3>
-          <div className="flex items-center gap-2">
-            <div className="size-2 bg-primary rounded-full" />
-            <span className="text-[10px] font-bold text-text_secondary uppercase tracking-widest">{theme.wording.score}</span>
+        {/* Performance Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 sm:gap-8">
+          <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-border">
+            <div className="text-[10px] font-black text-text_secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Cognitive Efficiency' : 'Efficiency'}</div>
+            <div className="text-4xl sm:text-6xl font-black tracking-tighter text-primary">{cognitiveEfficiency}%</div>
+            <div className="h-2 w-full bg-surface rounded-full overflow-hidden">
+              <div className="h-full bg-primary shadow-[0_0_10px_var(--color-primary)]" style={{ width: `${cognitiveEfficiency}%` }} />
+            </div>
+          </div>
+          <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-border">
+            <div className="text-[10px] font-black text-text_secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Consistency Index' : 'Consistency'}</div>
+            <div className="text-4xl sm:text-6xl font-black tracking-tighter text-secondary">{habitConsistency}%</div>
+            <div className="h-2 w-full bg-surface rounded-full overflow-hidden">
+              <div className="h-full bg-secondary shadow-[0_0_10px_var(--color-secondary)]" style={{ width: `${habitConsistency}%` }} />
+            </div>
+          </div>
+          <div className="stitch-card p-6 sm:p-10 space-y-4 sm:space-y-6 border-border">
+            <div className="text-[10px] font-black text-text_secondary uppercase tracking-widest">{theme.id === 'elite' ? 'Focus Resilience' : 'Focus'}</div>
+            <div className="text-4xl sm:text-6xl font-black tracking-tighter text-primary">{cognitiveEfficiency > 80 ? 'High' : cognitiveEfficiency > 50 ? 'Med' : 'Low'}</div>
+            <div className="flex gap-2">
+              {[1, 2, 3, 4, 5].map(i => (
+                <div key={i} className={`h-2 flex-1 rounded-full ${i <= Math.ceil(cognitiveEfficiency / 20) ? 'bg-primary shadow-[0_0_10px_var(--color-primary)]' : 'bg-surface'}`} />
+              ))}
+            </div>
           </div>
         </div>
-        <div className="h-64 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={[
-              { day: 'Mon', score: 65 },
-              { day: 'Tue', score: 68 },
-              { day: 'Wed', score: 75 },
-              { day: 'Thu', score: 72 },
-              { day: 'Fri', score: 84 },
-              { day: 'Sat', score: 88 },
-              { day: 'Sun', score: 92 },
-            ]}>
-              <defs>
-                <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-              <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: 'var(--color-text-secondary)', fontSize: 10, fontWeight: 'bold' }} />
-              <Tooltip 
-                contentStyle={{ backgroundColor: 'var(--color-surface)', border: '1px solid var(--color-primary)', borderRadius: '16px' }}
-                itemStyle={{ color: 'var(--color-primary)', fontWeight: 'bold' }}
-              />
-              <Area type="monotone" dataKey="score" stroke="var(--color-primary)" strokeWidth={3} fillOpacity={1} fill="url(#colorScore)" />
-            </AreaChart>
-          </ResponsiveContainer>
+
+        {/* Growth Visualization */}
+        <div className="glass-card p-8 border-border space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className={`text-xl font-bold tracking-tight text-text_primary`}>{theme.id === 'elite' ? 'Growth Trajectory' : 'Your Progress'}</h3>
+            <div className="flex items-center gap-2">
+              <div className="size-2 bg-primary rounded-full" />
+              <span className="text-[10px] font-bold text-text_secondary uppercase tracking-widest">{theme.wording.score}</span>
+            </div>
+          </div>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={getGrowthData()}>
+                <defs>
+                  <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
+                <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fill: 'var(--color-text-secondary)', fontSize: 10, fontWeight: 'bold' }} />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: 'var(--color-surface)', border: '1px solid var(--color-primary)', borderRadius: '16px' }}
+                  itemStyle={{ color: 'var(--color-primary)', fontWeight: 'bold' }}
+                />
+                <Area type="monotone" dataKey="score" stroke="var(--color-primary)" strokeWidth={3} fillOpacity={1} fill="url(#colorScore)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
-      </div>
-    </motion.div>
-  );
+      </motion.div>
+    );
+  };
 
   const NextActionCard = ({ task, onStartFocus }: { task: Mission | null, onStartFocus: (task: Mission) => void }) => {
     if (!task) return null;
     
     return (
-      <div className="stitch-card p-6 bg-primary/10 border-primary/30 relative overflow-hidden group">
+      <div className={`stitch-card p-6 ${motivationState?.recovery_mode ? 'bg-secondary/10 border-secondary/30' : 'bg-primary/10 border-primary/30'} relative overflow-hidden group`}>
         <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-          <Zap size={80} className="text-primary" />
+          <Zap size={80} className={motivationState?.recovery_mode ? 'text-secondary' : 'text-primary'} />
         </div>
         
         <div className="relative z-10">
           <div className="flex items-center gap-2 mb-4">
-            <div className="px-2 py-0.5 rounded-full bg-primary/20 text-[10px] font-black uppercase tracking-widest text-primary">
-              Next Strategic Action
+            <div className={`px-2 py-0.5 rounded-full ${motivationState?.recovery_mode ? 'bg-secondary/20 text-secondary' : 'bg-primary/20 text-primary'} text-[10px] font-black uppercase tracking-widest`}>
+              {motivationState?.recovery_mode ? 'Recovery Objective' : 'Primary Objective'}
             </div>
             {task.status === 'overdue' && (
               <div className="px-2 py-0.5 rounded-full bg-danger/20 text-[10px] font-black uppercase tracking-widest text-danger">
@@ -1854,6 +2387,7 @@ export default function App() {
             )}
           </div>
           
+          <div className="text-[10px] font-black uppercase tracking-widest text-text_secondary mb-1">Do this now:</div>
           <h3 className={`text-xl md:text-2xl font-black tracking-tighter mb-2 text-text_primary`}>
             {task.title}
           </h3>
@@ -1867,23 +2401,161 @@ export default function App() {
               <Zap size={14} />
               Impact: {task.impact}
             </div>
-            {task.deadline && (
-              <div className="flex items-center gap-1.5">
-                <Calendar size={14} />
-                {new Date(task.deadline).toLocaleDateString()}
-              </div>
-            )}
           </div>
           
           <button 
-            onClick={() => onStartFocus(task)}
-            className="w-full py-4 bg-primary text-black font-black uppercase tracking-[0.2em] rounded-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all shadow-lg shadow-primary/30"
+            onClick={() => handleAction('START_FOCUS', { task })}
+            className={`w-full py-4 ${motivationState?.recovery_mode ? 'bg-secondary' : 'bg-primary'} text-black font-black uppercase tracking-[0.2em] rounded-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-95 transition-all shadow-lg ${motivationState?.recovery_mode ? 'shadow-secondary/30' : 'shadow-primary/30'}`}
           >
             <Play size={18} fill="currentColor" />
             Engage Focus Mode
           </button>
         </div>
       </div>
+    );
+  };
+
+  const AiPanel = () => {
+    const [query, setQuery] = useState('');
+    const [chat, setChat] = useState<{ role: 'user' | 'ai', text: string }[]>([]);
+    const [isGenerating, setIsGenerating] = useState(false);
+
+    const askAi = async () => {
+      if (!query.trim()) return;
+      const userMsg = query;
+      setQuery('');
+      setChat(prev => [...prev, { role: 'user', text: userMsg }]);
+      setIsGenerating(true);
+
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: `User Query: ${userMsg}\nContext: ${JSON.stringify({ missions, consistencySystem, userProfile })}\nAs an AI Life Architect, provide a concise, high-impact response.`,
+        });
+        setChat(prev => [...prev, { role: 'ai', text: response.text || "I'm processing your request." }]);
+      } catch (err) {
+        setChat(prev => [...prev, { role: 'ai', text: "Neural link interrupted. Please try again." }]);
+      } finally {
+        setIsGenerating(false);
+      }
+    };
+
+    return (
+      <motion.div 
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        className="fixed inset-y-0 right-0 w-full max-w-md bg-background border-l border-border z-[150] shadow-2xl flex flex-col"
+      >
+        <div className="p-6 border-b border-border flex items-center justify-between bg-surface">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+              <Brain size={24} />
+            </div>
+            <div>
+              <h3 className="text-lg font-black tracking-tighter text-text_primary">AI Architect</h3>
+              <p className="text-[10px] font-black uppercase tracking-widest text-primary">Neural Sync Active</p>
+            </div>
+          </div>
+          <button onClick={() => setShowAiPanel(false)} className="text-text_secondary hover:text-text_primary">
+            <X size={24} />
+          </button>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar">
+          {chat.length === 0 && (
+            <div className="text-center py-12 space-y-4">
+              <Sparkles size={48} className="mx-auto text-primary opacity-20" />
+              <p className="text-text_secondary font-bold text-sm italic">"How can I optimize your performance today?"</p>
+            </div>
+          )}
+          {chat.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] p-4 rounded-2xl font-medium text-sm leading-relaxed ${msg.role === 'user' ? 'bg-primary text-black' : 'bg-surface border border-border text-text_primary'}`}>
+                {msg.text}
+              </div>
+            </div>
+          ))}
+          {isGenerating && (
+            <div className="flex justify-start">
+              <div className="bg-surface border border-border p-4 rounded-2xl flex gap-1">
+                <div className="size-1.5 bg-primary rounded-full animate-bounce" />
+                <div className="size-1.5 bg-primary rounded-full animate-bounce [animation-delay:0.2s]" />
+                <div className="size-1.5 bg-primary rounded-full animate-bounce [animation-delay:0.4s]" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 border-t border-border bg-surface">
+          <div className="relative">
+            <input 
+              type="text" 
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && askAi()}
+              placeholder="Ask your AI Architect..."
+              className="w-full bg-background border border-border rounded-xl px-4 py-4 pr-12 outline-none focus:border-primary transition-all font-bold text-text_primary"
+            />
+            <button 
+              onClick={askAi}
+              className="absolute right-2 top-1/2 -translate-y-1/2 size-10 bg-primary text-black rounded-lg flex items-center justify-center hover:scale-105 active:scale-95 transition-all"
+            >
+              <ArrowRight size={20} />
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
+  };
+
+  const NotificationsPanel = () => {
+    return (
+      <motion.div 
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        className="fixed inset-y-0 right-0 w-full max-w-md bg-background border-l border-border z-[150] shadow-2xl flex flex-col"
+      >
+        <div className="p-6 border-b border-border flex items-center justify-between bg-surface">
+          <div className="flex items-center gap-3">
+            <div className="size-10 rounded-xl bg-secondary/10 flex items-center justify-center text-secondary">
+              <Bell size={24} />
+            </div>
+            <div>
+              <h3 className="text-lg font-black tracking-tighter text-text_primary">Neural Alerts</h3>
+              <p className="text-[10px] font-black uppercase tracking-widest text-secondary">System Status: Optimal</p>
+            </div>
+          </div>
+          <button onClick={() => setShowNotifications(false)} className="text-text_secondary hover:text-text_primary">
+            <X size={24} />
+          </button>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 no-scrollbar">
+          {aiInsights.length === 0 ? (
+            <div className="text-center py-12 space-y-4">
+              <Bell size={48} className="mx-auto text-text_secondary opacity-10" />
+              <p className="text-text_secondary font-bold text-sm">No new alerts detected.</p>
+            </div>
+          ) : (
+            aiInsights.map((insight, i) => (
+              <div key={i} className="stitch-card p-4 border-border bg-surface flex gap-4">
+                <div className="size-10 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                  <Zap size={18} />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-text_primary">{insight.insight_text}</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-text_secondary">
+                    {toDate(insight.created_at).toLocaleTimeString()}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </motion.div>
     );
   };
 
@@ -1900,7 +2572,8 @@ export default function App() {
         }, 1000);
       } else if (timeLeft === 0) {
         clearInterval(interval);
-        onComplete();
+        handleAction('COMPLETE_TASK', { id: task.id, streak: task.streak });
+        handleAction('STOP_FOCUS');
       }
       return () => clearInterval(interval);
     }, [isActive, timeLeft]);
@@ -1996,13 +2669,16 @@ export default function App() {
               {isActive ? <Pause size={40} fill="currentColor" /> : <Play size={40} fill="currentColor" className="ml-1" />}
             </button>
             <button 
-              onClick={onCancel}
+              onClick={() => handleAction('STOP_FOCUS')}
               className="px-10 md:px-14 py-5 md:py-7 bg-surface text-text_secondary font-black uppercase tracking-widest rounded-2xl hover:bg-danger/20 hover:text-danger transition-all border border-border"
             >
               Abort Mission
             </button>
             <button 
-              onClick={onComplete}
+              onClick={() => {
+                handleAction('COMPLETE_TASK', { id: task.id, streak: task.streak });
+                handleAction('STOP_FOCUS');
+              }}
               className="px-10 md:px-14 py-5 md:py-7 bg-primary text-black font-black uppercase tracking-widest rounded-2xl hover:scale-105 transition-all shadow-2xl shadow-primary/30"
             >
               Mission Complete
@@ -2013,136 +2689,147 @@ export default function App() {
     );
   };
 
-  const renderDashboard = () => (
-    <div className="space-y-6 md:space-y-8 pb-32">
-      {/* Header */}
-      <div className="flex items-center justify-between px-0">
-        <div>
-          <h1 className={`text-2xl md:text-3xl font-black tracking-tighter text-text_primary`}>
-            {theme.wording.dashboard.split(' ')[0]} <span className="text-primary">{theme.wording.dashboard.split(' ')[1] || ''}</span>
-          </h1>
-          <p className="text-[10px] md:text-xs font-bold text-text_secondary uppercase tracking-[0.2em] mt-1">
-            {theme.wording.neuralSync}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="text-right hidden sm:block">
-            <div className={`text-xs font-black uppercase tracking-widest text-text_primary`}>Level 12</div>
-            <div className="w-24 h-1.5 bg-border rounded-full mt-1 overflow-hidden">
-              <div className="w-3/4 h-full bg-primary" />
-            </div>
-          </div>
-          <div className={`size-10 md:size-12 rounded-xl md:rounded-2xl flex items-center justify-center text-text_secondary bg-surface border border-border`}>
-            <Bell size={20} />
-          </div>
-        </div>
-      </div>
+  const renderDashboard = () => {
+    const todayMissions = missions.filter(m => 
+      isToday(m.created_at) || 
+      (m.deadline && isToday(m.deadline)) || 
+      (m.completed_at && isToday(m.completed_at))
+    );
+    const completedToday = todayMissions.filter(m => m.status === 'completed' && m.completed_at && isToday(m.completed_at)).length;
+    const totalToday = todayMissions.length;
+    const dailyEfficiency = totalToday > 0 ? Math.round((completedToday / totalToday) * 100) : 0;
 
-      {/* Life State Engine */}
-      <LifeStateEngine />
-
-      {/* Strategic Intelligence */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <NextActionCard 
-            task={nextAction} 
-            onStartFocus={(task) => setFocusTask(task)} 
-          />
-        </div>
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-text_secondary">AI Insight</h2>
-            <Brain size={14} className="text-primary" />
-          </div>
-          <div className="stitch-card p-4 bg-surface border-l-4 border-primary">
-            <p className="text-sm font-bold text-text_primary leading-relaxed">
-              {aiInsights.length > 0 ? aiInsights[0].insight_text : "Analyzing your performance patterns... stay focused."}
+    return (
+      <div className="space-y-6 md:space-y-8 pb-32">
+        {/* Header */}
+        <div className="flex items-center justify-between px-0">
+          <div>
+            <h1 className={`text-2xl md:text-3xl font-black tracking-tighter text-text_primary`}>
+              {theme.wording.dashboard.split(' ')[0]} <span className="text-primary">{theme.wording.dashboard.split(' ')[1] || ''}</span>
+            </h1>
+            <p className="text-[10px] md:text-xs font-bold text-text_secondary uppercase tracking-[0.2em] mt-1">
+              {theme.wording.neuralSync}
             </p>
           </div>
-          
-          {/* Basic Analytics */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="glass-card p-3 border-border">
-              <div className="text-[8px] font-black uppercase tracking-widest text-text_secondary mb-1">Done Today</div>
-              <div className="text-xl font-black text-text_primary">{missions.filter(m => m.status === 'completed' && m.completed_at && new Date(m.completed_at).toDateString() === new Date().toDateString()).length}</div>
+          <div className="flex items-center gap-3">
+            <div className="text-right hidden sm:block">
+              <div className={`text-xs font-black uppercase tracking-widest text-text_primary`}>Level {Math.floor(missions.filter(m => m.status === 'completed').length / 5) + 1}</div>
+              <div className="w-24 h-1.5 bg-border rounded-full mt-1 overflow-hidden">
+                <div className="h-full bg-primary" style={{ width: `${(missions.filter(m => m.status === 'completed').length % 5) * 20}%` }} />
+              </div>
             </div>
-            <div className="glass-card p-3 border-border">
-              <div className="text-[8px] font-black uppercase tracking-widest text-text_secondary mb-1">Focus Time</div>
-              <div className="text-xl font-black text-primary">{selfAwareness?.focusTimeMinutes || 0}m</div>
+            <div className={`size-10 md:size-12 rounded-xl md:rounded-2xl flex items-center justify-center text-text_secondary bg-surface border border-border cursor-pointer hover:text-primary transition-all`} onClick={() => setShowNotifications(true)}>
+              <Bell size={20} />
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Core Actions */}
-      <div className="space-y-4">
-        <button 
-          onClick={generateSchedule}
-          className="pilot-button"
-        >
-          <Sparkles className="size-5 md:size-6" />
-          {theme.wording.pilot}
-        </button>
-        
-        <div className="grid grid-cols-2 gap-3 md:gap-4">
-          <button 
-            onClick={() => setActiveTab('tasks')}
-            className="stitch-card p-4 md:p-5 flex flex-col items-center gap-3 hover:bg-surface transition-all"
-          >
-            <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-              <LayoutGrid size={20} />
-            </div>
-            <span className={`text-[10px] font-black uppercase tracking-widest text-text_primary`}>{theme.wording.missions}</span>
-          </button>
-          <button 
-            onClick={() => setActiveTab('schedule')}
-            className="stitch-card p-4 md:p-5 flex flex-col items-center gap-3 hover:bg-surface transition-all"
-          >
-            <div className="size-10 rounded-xl bg-secondary/10 flex items-center justify-center text-secondary">
-              <Activity size={20} />
-            </div>
-            <span className={`text-[10px] font-black uppercase tracking-widest text-text_primary`}>{theme.wording.timeline}</span>
-          </button>
-        </div>
-      </div>
+        {/* Life State Engine */}
+        <LifeStateEngine />
 
-      {/* Active Missions */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between px-0">
-          <h2 className="text-[10px] md:text-xs font-black uppercase tracking-[0.3em] text-text_secondary">{theme.wording.activeMissions}</h2>
-          <button className="text-[10px] font-black uppercase tracking-widest text-primary">View All</button>
-        </div>
-        <div className="grid grid-cols-1 gap-4">
-          {missions.filter(m => m.status === 'pending').slice(0, 3).map(mission => (
-            <MissionCard key={mission.id} mission={mission} />
-          ))}
-        </div>
-      </div>
-
-      {/* Consistency Pulse */}
-      <div className={`stitch-card p-4 md:p-6 bg-primary/5 border-border`}>
-        <div className="flex items-center gap-4 mb-4">
-          <div className="size-10 md:size-12 rounded-xl md:rounded-2xl bg-primary/20 flex items-center justify-center text-primary">
-            <Activity size={20} className="md:hidden" />
-            <Activity size={24} className="hidden md:block" />
-          </div>
-          <div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-primary">Consistency Pulse</div>
-            <div className={`text-base md:text-lg font-bold text-text_primary`}>92% Stability</div>
-          </div>
-        </div>
-        <div className="flex gap-1 h-8 items-end">
-          {[40, 70, 45, 90, 65, 80, 95, 60, 85, 75, 90, 100].map((h, i) => (
-            <div 
-              key={i} 
-              className="flex-1 bg-primary/20 rounded-t-sm"
-              style={{ height: `${h}%` }}
+        {/* Strategic Intelligence */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2">
+            <NextActionCard 
+              task={nextAction} 
+              onStartFocus={(task) => handleAction('START_FOCUS', { task })} 
             />
-          ))}
+          </div>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-text_secondary">AI Insight</h2>
+              <Brain size={14} className="text-primary cursor-pointer hover:scale-110 transition-transform" onClick={() => handleAction('GENERATE_INSIGHTS')} />
+            </div>
+            <div className="stitch-card p-4 bg-surface border-l-4 border-primary">
+              <p className="text-sm font-bold text-text_primary leading-relaxed">
+                {motivationQuote}
+              </p>
+            </div>
+            
+            {/* Basic Analytics */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="glass-card p-3 border-border">
+                <div className="text-[8px] font-black uppercase tracking-widest text-text_secondary mb-1">Done Today</div>
+                <div className="text-xl font-black text-text_primary">{completedToday}</div>
+              </div>
+              <div className="glass-card p-3 border-border">
+                <div className="text-[8px] font-black uppercase tracking-widest text-text_secondary mb-1">Focus Time</div>
+                <div className="text-xl font-black text-primary">{selfAwareness?.focusTimeMinutes || 0}m</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Core Actions */}
+        <div className="space-y-4">
+          <button 
+            onClick={() => handleAction('PILOT_MY_DAY')}
+            className="pilot-button"
+          >
+            <Sparkles className="size-5 md:size-6" />
+            {theme.wording.pilot}
+          </button>
+          
+          <div className="grid grid-cols-2 gap-3 md:gap-4">
+            <button 
+              onClick={() => setActiveTab('tasks')}
+              className="stitch-card p-4 md:p-5 flex flex-col items-center gap-3 hover:bg-surface transition-all"
+            >
+              <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
+                <LayoutGrid size={20} />
+              </div>
+              <span className={`text-[10px] font-black uppercase tracking-widest text-text_primary`}>{theme.wording.missions}</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('schedule')}
+              className="stitch-card p-4 md:p-5 flex flex-col items-center gap-3 hover:bg-surface transition-all"
+            >
+              <div className="size-10 rounded-xl bg-secondary/10 flex items-center justify-center text-secondary">
+                <Activity size={20} />
+              </div>
+              <span className={`text-[10px] font-black uppercase tracking-widest text-text_primary`}>{theme.wording.timeline}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Active Missions */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between px-0">
+            <h2 className="text-[10px] md:text-xs font-black uppercase tracking-[0.3em] text-text_secondary">{theme.wording.activeMissions}</h2>
+            <button onClick={() => setActiveTab('tasks')} className="text-[10px] font-black uppercase tracking-widest text-primary">View All</button>
+          </div>
+          <div className="grid grid-cols-1 gap-4">
+            {missions.filter(m => m.status === 'pending').slice(0, 3).map(mission => (
+              <MissionCard key={mission.id} mission={mission} />
+            ))}
+          </div>
+        </div>
+
+        {/* Consistency Pulse */}
+        <div className={`stitch-card p-4 md:p-6 bg-primary/5 border-border`}>
+          <div className="flex items-center gap-4 mb-4">
+            <div className="size-10 md:size-12 rounded-xl md:rounded-2xl bg-primary/20 flex items-center justify-center text-primary">
+              <Activity size={20} className="md:hidden" />
+              <Activity size={24} className="hidden md:block" />
+            </div>
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-primary">Consistency Pulse</div>
+              <div className={`text-base md:text-lg font-bold text-text_primary`}>{Math.round(getConsistencyPulse().reduce((a, b) => a + b, 0) / 12)}% Stability</div>
+            </div>
+          </div>
+          <div className="flex gap-1 h-8 items-end">
+            {getConsistencyPulse().map((h, i) => (
+              <div 
+                key={i} 
+                className="flex-1 bg-primary/20 rounded-t-sm"
+                style={{ height: `${h}%` }}
+              />
+            ))}
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
   const renderSettings = () => (
     <div className="space-y-8 pb-32">
       <div className="space-y-2">
@@ -2237,460 +2924,119 @@ export default function App() {
     }
   };
 
-  const fetchMissions = async () => {
-    try {
-      const res = await apiFetch('/api/tasks');
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        const now = new Date();
-        setMissions(data.map((m: any) => {
-          let status = m.status;
-          if (status === 'pending' && m.deadline && new Date(m.deadline) < now) {
-            status = 'overdue';
-          }
-          
-          return {
-            ...m,
-            status,
-            impact: m.importance >= 8 ? 'critical' : m.importance >= 6 ? 'high' : m.importance >= 4 ? 'moderate' : 'low',
-            urgency: m.importance
-          };
-        }));
-      } else {
-        console.error("Missions fetch returned non-array:", data);
-        setMissions([]);
-        if (data.error) setError(data.error);
-      }
-    } catch (error) {
-      console.error("Failed to fetch missions:", error);
-      setMissions([]);
-    }
-  };
-
-  const fetchUserProfile = async () => {
-    try {
-      const res = await apiFetch('/api/user/profile');
-      const data = await res.json();
-      setUserProfile(data);
-    } catch (error) {
-      console.error("Failed to fetch profile:", error);
-    }
-  };
-
-  const fetchGoals = async () => {
-    try {
-      const res = await apiFetch('/api/goals');
-      const data = await res.json();
-      setGoals(data);
-    } catch (error) {
-      console.error("Failed to fetch goals:", error);
-    }
-  };
-
   const fetchNextAction = async () => {
-    try {
-      const res = await apiFetch('/api/ai/next-action');
-      const data = await res.json();
-      if (data.id) setNextAction(data);
-      else setNextAction(null);
-    } catch (error) {
-      console.error("Failed to fetch next action:", error);
+    const pendingTasks = missions.filter(m => m.status === 'pending');
+    if (pendingTasks.length === 0) {
+      setNextAction(null);
+      return;
     }
-  };
 
-  const fetchAiInsights = async () => {
-    try {
-      const res = await apiFetch('/api/ai/insights');
-      const data = await res.json();
-      setAiInsights(data);
-    } catch (error) {
-      console.error("Failed to fetch insights:", error);
-    }
-  };
+    // Client-side heuristic first for speed
+    const sorted = [...pendingTasks].sort((a, b) => {
+      // Priority formula: (Importance * 0.4) + (Impact * 0.4) + (Urgency * 0.2)
+      const scoreA = (a.importance * 0.4) + ((a.impact_level || 5) * 0.4) + ((a.urgency_score || 5) * 0.2);
+      const scoreB = (b.importance * 0.4) + ((b.impact_level || 5) * 0.4) + ((b.urgency_score || 5) * 0.2);
+      return scoreB - scoreA;
+    });
 
-  const fetchConsistencySystem = async () => {
-    try {
-      const res = await apiFetch('/api/habits');
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setConsistencySystem(data);
-      } else {
-        console.error("Consistency system fetch returned non-array:", data);
-        setConsistencySystem([]);
+    setNextAction(sorted[0]);
+
+    // Optional: Use AI to refine if there are many tasks
+    if (pendingTasks.length > 5) {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const prompt = `Analyze these tasks and identify the single most important "Next Strategic Action" to take right now.
+      Tasks: ${JSON.stringify(pendingTasks.map(t => ({ id: t.id, title: t.title, importance: t.importance, impact: t.impact_level, urgency: t.urgency_score })))}
+      User Profile: ${JSON.stringify(userProfile)}
+      Return ONLY the JSON object of the selected task ID: { "id": "TASK_ID" }`;
+
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: prompt,
+          config: { responseMimeType: "application/json" }
+        });
+        const selected = JSON.parse(response.text);
+        if (selected && selected.id) {
+          const fullTask = missions.find(m => m.id === selected.id);
+          if (fullTask) setNextAction(fullTask);
+        }
+      } catch (err) {
+        console.error("AI Next Action selection failed:", err);
       }
-    } catch (err) {
-      console.error("Failed to fetch consistency system:", err);
     }
   };
 
-  const fetchHabitStats = async () => {
-    try {
-      const res = await apiFetch('/api/habits/stats');
-      const data = await res.json();
-      if (Array.isArray(data)) {
-        setHabitStats(data);
-      } else {
-        console.error("Habit stats fetch returned non-array:", data);
-        setHabitStats([]);
-      }
-    } catch (err) {
-      console.error("Failed to fetch habit stats:", err);
+  useEffect(() => {
+    if (missions.length > 0) {
+      fetchNextAction();
     }
-  };
-
-  const fetchSelfAwareness = async () => {
-    try {
-      const res = await apiFetch('/api/analytics');
-      const data = await res.json();
-      if (data && !data.error) {
-        setSelfAwareness(data);
-      } else {
-        console.error("Self-awareness fetch error:", data?.error);
-      }
-    } catch (error) {
-      console.error("Failed to fetch self-awareness:", error);
-    }
-  };
+  }, [missions.length]);
 
   const saveMission = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title || duration <= 0 || !token) return;
+    if (!title.trim()) return;
 
-    // Deadline validation
-    if (deadline) {
-      const selectedDate = new Date(deadline);
-      if (isNaN(selectedDate.getTime())) {
-        setDeadlineError("Invalid date format.");
-        return;
-      }
-      const now = new Date();
-      if (selectedDate < now) {
-        setDeadlineError("Deadline cannot be in the past.");
-        return;
-      }
+    const payload = {
+      title,
+      importance: urgencyScore,
+      urgency_score: urgencyScore,
+      estimated_effort: estimatedEffort,
+      impact_level: impactLevel,
+      duration,
+      deadline: deadline ? Timestamp.fromDate(new Date(deadline)) : null,
+      category: 'work',
+    };
+
+    if (editingMission) {
+      await handleAction('UPDATE_TASK', { id: editingMission.id, data: payload });
+      setEditingMission(null);
+    } else {
+      await handleAction('ADD_TASK', payload);
     }
-    setDeadlineError(null);
-    
-    setLoading(true);
-    setError(null);
-    try {
-      const method = editingMission ? 'PUT' : 'POST';
-      const url = editingMission ? `/api/tasks/${editingMission.id}` : '/api/tasks';
-      
-      const res = await apiFetch(url, {
-        method,
-        headers: { 
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ 
-          title, 
-          importance: impactLevel, 
-          urgency_score: urgencyScore,
-          estimated_effort: estimatedEffort,
-          impact_level: impactLevel,
-          duration, 
-          is_habit: isHabit, 
-          deadline, 
-          category 
-        }),
-      });
-      
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Failed to save mission");
-      }
-      
-      resetForm();
-      await fetchMissions();
-      await fetchSelfAwareness();
-      await fetchNextAction();
-      await fetchAiInsights();
-    } catch (error: any) {
-      console.error("Failed to save mission:", error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resetForm = () => {
-    setTitle('');
-    setImpact('moderate');
-    setUrgencyScore(5);
-    setEstimatedEffort(3);
-    setImpactLevel(5);
-    setDuration(30);
-    setDeadline('');
-    setDeadlineError(null);
-    setIsHabit(false);
-    setEditingMission(null);
-  };
-
-  const startEdit = (mission: Mission) => {
-    setEditingMission(mission);
-    setTitle(mission.title);
-    setImpact(mission.impact);
-    setUrgencyScore(mission.urgency_score || 5);
-    setEstimatedEffort(mission.estimated_effort || 3);
-    setImpactLevel(mission.impact_level || 5);
-    setDuration(mission.duration);
-    setDeadline(mission.deadline || '');
-    setIsHabit(mission.is_habit);
-    setActiveTab('tasks');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const toggleDone = async (id: number) => {
-    // Optimistic UI update
-    setMissions(prev => prev.map(m => {
-      if (m.id === id) {
-        const newStatus = m.status === 'completed' ? 'pending' : 'completed';
-        return { ...m, status: newStatus, completed_at: newStatus === 'completed' ? new Date().toISOString() : undefined };
-      }
-      return m;
-    }));
-
-    try {
-      const res = await apiFetch(`/api/tasks/${id}/toggle`, { 
-        method: 'POST'
-      });
-      const result = await res.json();
-      
-      if (result.status === 'completed') {
-        confetti({
-          particleCount: 100,
-          spread: 70,
-          origin: { y: 0.6 },
-          colors: ['#4F46E5', '#10B981', '#F59E0B']
-        });
-        
-        if ("Notification" in window && Notification.permission === "granted") {
-          new Notification("LifePilot AI: Task Completed!", { 
-            body: "Excellent work! You're staying on track with LifePilot AI.",
-            icon: "/favicon.ico"
-          });
-        }
-      }
-
-      await fetchMissions();
-      await fetchSelfAwareness();
-      await fetchNextAction();
-      await fetchAiInsights();
-      if (timelineMatrix.length > 0) generateSchedule();
-    } catch (error) {
-      console.error("Toggle error:", error);
-      setError("Failed to update mission status.");
-      fetchMissions(); // Rollback
-    }
-  };
-
-  const deleteTask = async (id: number) => {
-    // Optimistic UI update
-    const originalMissions = [...missions];
-    setMissions(prev => prev.filter(m => m.id !== id));
-
-    try {
-      const res = await apiFetch(`/api/tasks/${id}`, { 
-        method: 'DELETE'
-      });
-      if (!res.ok) throw new Error("Failed to delete task");
-      
-      await fetchMissions();
-      await fetchSelfAwareness();
-      await fetchNextAction();
-      await fetchAiInsights();
-      
-      if (activeTab === 'schedule') {
-        generateSchedule();
-      }
-    } catch (error) {
-      console.error("Delete error:", error);
-      setError("Could not delete task. Please try again.");
-      setMissions(originalMissions); // Rollback
-    }
+    resetForm();
   };
 
   const generateSchedule = async () => {
-    if (!token) {
-      setShowAuth(true);
-      return;
-    }
-    
     setLoading(true);
-    setAiSuggestion(null);
-    setError(null);
-
-    try {
-      const habitList = consistencySystem.map(h => `${h.title} (${h.frequency}, goal: ${h.goal_count})`).join(', ');
-      const missionList = missions.map(m => `${m.title} (Impact: ${m.impact}${m.deadline ? `, Due: ${m.deadline}` : ''})`).join(', ');
-      const prompt = `Generate a daily schedule for a user with these missions: ${missionList}. Also incorporate these consistency protocols (habits): ${habitList}. Focus on peak performance, cognitive load management, and circadian alignment. Return a concise, powerful strategist-level summary.`;
-      
-      const res = await apiFetch('/api/ai/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          prompt, 
-          taskType: 'complex',
-          systemInstruction: "You are LifePilot AI, an elite productivity strategist. Your goal is to help users control their day for maximum output and biological alignment. Speak in short, powerful insights. Be authoritative and intelligent."
-        })
-      });
-
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to generate timeline matrix");
-      }
-
-      setAiSuggestion(data.text);
-      setAiScheduleContent(data.text);
-      setShowAiScheduleModal(true);
-      
-      // Also refresh the schedule from the backend
-      const scheduleRes = await apiFetch('/api/schedule');
-      const scheduleData = await scheduleRes.json();
-      if (Array.isArray(scheduleData)) {
-        setTimelineMatrix(scheduleData);
-      } else {
-        console.error("Timeline matrix fetch returned non-array:", scheduleData);
-        setTimelineMatrix([]);
-      }
-      setActiveTab('schedule');
-
-    } catch (error: any) {
-      console.error("AI Generation Error:", error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resetHabitForm = () => {
-    setHabitTitle('');
-    setHabitDesc('');
-    setHabitFreq('daily');
-    setHabitGoal(1);
-    setEditingHabit(null);
+    await handleAction('PILOT_MY_DAY');
+    setLoading(false);
   };
 
   const saveHabit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    try {
-      const habitData = {
-        title: habitTitle,
-        description: habitDesc,
-        frequency: habitFreq,
-        goal_count: habitGoal
-      };
+    if (!habitTitle.trim()) return;
 
-      if (editingHabit) {
-        await apiFetch(`/api/habits/${editingHabit.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(habitData)
-        });
-      } else {
-        await apiFetch('/api/habits', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(habitData)
-        });
-      }
+    const payload = {
+      title: habitTitle,
+      description: habitDesc,
+      frequency: habitFreq,
+      goal_count: habitGoal,
+    };
 
-      setHabitTitle('');
-      setHabitDesc('');
-      setHabitFreq('daily');
-      setHabitGoal(1);
-      setShowHabitModal(false);
+    if (editingHabit) {
+      await handleAction('UPDATE_HABIT', { id: editingHabit.id, ...payload });
       setEditingHabit(null);
-      fetchConsistencySystem();
-      fetchHabitStats();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    } else {
+      await handleAction('ADD_HABIT', payload);
     }
+    setShowHabitModal(false);
+    resetHabitForm();
   };
 
-  const completeHabit = async (id: number) => {
-    try {
-      const res = await apiFetch(`/api/habits/${id}/complete`, {
-        method: 'POST'
-      });
-      if (res.ok) {
-        confetti({
-          particleCount: 50,
-          spread: 60,
-          origin: { y: 0.7 }
-        });
-        fetchConsistencySystem();
-        fetchHabitStats();
-      }
-    } catch (err: any) {
-      setError(err.message);
-    }
+  const completeHabit = async (id: string) => {
+    const habit = consistencySystem.find(h => h.id === id);
+    if (!habit) return;
+    await handleAction('TOGGLE_HABIT', { id, current_count: habit.current_count, streak: habit.streak });
   };
 
-  const deleteHabit = async (id: number) => {
-    try {
-      await apiFetch(`/api/habits/${id}`, {
-        method: 'DELETE'
-      });
-      fetchConsistencySystem();
-      fetchHabitStats();
-    } catch (err: any) {
-      setError(err.message);
-    }
+  const deleteHabit = async (id: string) => {
+    await handleAction('DELETE_HABIT', { id });
   };
 
-  const editHabit = (habit: Habit) => {
-    setEditingHabit(habit);
-    setHabitTitle(habit.title);
-    setHabitDesc(habit.description);
-    setHabitFreq(habit.frequency);
-    setHabitGoal(habit.goal_count);
-    setShowHabitModal(true);
-  };
-
-  const getAiInsights = async (currentSchedule: Mission[]) => {
-    if (!token) return;
-    
-    try {
-      const prompt = `Analyze this daily schedule and provide 3 brief, actionable productivity tips AND a short powerful motivational quote (max 15 words). 
-        Daily Goal: ${dailyGoal}. 
-        Schedule: ${JSON.stringify(currentSchedule)}
-        
-        Return the response in JSON format with keys: "tips" (string) and "quote" (string).`;
-      
-      const res = await apiFetch('/api/ai/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          prompt,
-          taskType: 'complex',
-          systemInstruction: "You are LifePilot AI, a professional productivity assistant. Your goal is to help users optimize their daily schedules for maximum focus and balance. Be concise, motivating, and professional."
-        })
-      });
-
-      const data = await res.json();
-      
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to get AI insights");
-      }
-
-      try {
-        const parsed = JSON.parse(data.text);
-        setAiSuggestion(parsed.tips);
-        setMotivationQuote(parsed.quote);
-      } catch (e) {
-        setAiSuggestion(data.text);
-      }
-      
-      fetchUsage(); // Refresh usage status
-    } catch (error: any) {
-      console.error("AI Insights Error:", error);
-      setAiSuggestion(error.message || "AI Insights temporarily unavailable.");
-    }
+  const generateInsights = async () => {
+    setLoading(true);
+    await handleAction('GENERATE_INSIGHTS');
+    setLoading(false);
   };
 
   const exportToICS = () => {
@@ -2788,7 +3134,7 @@ export default function App() {
     if (taskFilter === 'all') return true;
     if (taskFilter === 'pending') return task.status === 'pending';
     if (taskFilter === 'completed') return task.status === 'completed';
-    if (taskFilter === 'overdue') return task.deadline && new Date(task.deadline) < new Date() && task.status === 'pending';
+    if (taskFilter === 'overdue') return task.deadline && toDate(task.deadline) < new Date() && task.status === 'pending';
     return true;
   });
 
@@ -2847,10 +3193,10 @@ export default function App() {
   const handleFocusComplete = async () => {
     if (!focusTask) return;
     try {
-      await toggleDone(focusTask.id);
+      await handleAction('COMPLETE_TASK', { id: focusTask.id, streak: focusTask.streak });
       setFocusTask(null);
-      fetchNextAction();
-      fetchAiInsights();
+      await generateDayPlan();
+      await generateAiInsights();
     } catch (error) {
       console.error("Failed to complete focus task:", error);
     }
@@ -2877,6 +3223,61 @@ export default function App() {
               onComplete={handleFocusComplete} 
               onCancel={handleFocusCancel} 
             />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Smart Reminder Banner */}
+      <AnimatePresence>
+        {activeReminder && (
+          <motion.div
+            initial={{ y: -100 }}
+            animate={{ y: 0 }}
+            exit={{ y: -100 }}
+            className="fixed top-20 left-4 right-4 z-[110] glass-card p-4 border-primary bg-primary/10 flex items-center gap-4 shadow-2xl"
+          >
+            <div className="size-10 rounded-full bg-primary flex items-center justify-center text-black">
+              <Zap size={20} />
+            </div>
+            <div className="flex-1">
+              <div className="text-[8px] font-black uppercase tracking-widest text-primary mb-1">Neural Nudge</div>
+              <p className="text-sm font-bold text-text_primary">{activeReminder}</p>
+            </div>
+            <button 
+              onClick={() => setActiveReminder(null)}
+              className="text-text_secondary hover:text-text_primary"
+            >
+              <X size={20} />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Micro-reward Toast */}
+      <AnimatePresence>
+        {microReward && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 bg-primary text-black rounded-full font-black uppercase tracking-widest text-xs shadow-2xl flex items-center gap-3"
+          >
+            <Sparkles size={16} />
+            {microReward}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Recovery Mode Banner */}
+      <AnimatePresence>
+        {motivationState?.recovery_mode && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="bg-secondary text-black text-center py-2 text-[10px] font-black uppercase tracking-[0.2em] sticky top-0 z-[120]"
+          >
+            Recovery Mode Active: Complete 2 tasks to reset system momentum.
           </motion.div>
         )}
       </AnimatePresence>
@@ -3197,6 +3598,14 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showAiPanel && <AiPanel />}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showNotifications && <NotificationsPanel />}
+      </AnimatePresence>
+
       {/* Onboarding Overlay */}
       <AnimatePresence>
         {showOnboarding && renderOnboarding()}
@@ -3205,7 +3614,7 @@ export default function App() {
       {/* Top Navigation / Header */}
       <header className={`flex items-center justify-between p-4 md:p-6 max-w-6xl mx-auto sticky top-0 z-40 backdrop-blur-2xl border-b w-full bg-background/80 border-border`}>
         <div className="flex items-center gap-2 md:gap-3">
-          <div className="size-8 md:size-10 rounded-lg md:rounded-xl bg-primary flex items-center justify-center shadow-lg shadow-primary/20">
+          <div className="size-8 md:size-10 rounded-lg md:rounded-xl bg-[#dedede] flex items-center justify-center shadow-lg shadow-primary/20">
             <Sparkles className="text-black md:hidden" size={16} />
             <Sparkles className="text-black hidden md:block" size={20} />
           </div>
@@ -3260,6 +3669,7 @@ export default function App() {
             <button 
               key={item.id}
               onClick={() => setActiveTab(item.id as any)}
+              style={{ backgroundColor: item.id === 'home' ? '#a0a0a0' : undefined }}
               className={`flex flex-col items-center gap-1 sm:gap-1.5 px-3 sm:px-6 py-3 sm:py-4 rounded-[24px] sm:rounded-[28px] transition-all duration-500 ${
                 activeTab === item.id ? 'bg-primary text-black shadow-xl shadow-primary/20 scale-105' : 'text-text_secondary hover:text-text_primary hover:bg-surface'
               }`}

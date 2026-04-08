@@ -16,20 +16,130 @@
     },
     "Task": {
       "title": "Task",
-      "description": "A task or habit for the user",
+      "description": "A task or mission for the user",
       "type": "object",
       "properties": {
         "user_id": { "type": "string" },
         "title": { "type": "string" },
         "importance": { "type": "integer" },
+        "urgency_score": { "type": "integer" },
+        "estimated_effort": { "type": "integer" },
+        "impact_level": { "type": "integer" },
         "duration": { "type": "integer" },
-        "status": { "type": "string", "enum": ["pending", "completed"] },
+        "status": { "type": "string", "enum": ["pending", "completed", "overdue"] },
         "is_habit": { "type": "boolean" },
         "streak": { "type": "integer" },
         "deadline": { "type": "string", "format": "date-time" },
+        "category": { "type": "string" },
+        "completed_at": { "type": "string", "format": "date-time" },
         "created_at": { "type": "string", "format": "date-time" }
       },
       "required": ["user_id", "title"]
+    },
+    "Habit": {
+      "title": "Habit",
+      "description": "A recurring habit",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "frequency": { "type": "string", "enum": ["daily", "weekly"] },
+        "goal_count": { "type": "integer" },
+        "current_count": { "type": "integer" },
+        "streak": { "type": "integer" },
+        "last_completed_at": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "title"]
+    },
+    "Goal": {
+      "title": "Goal",
+      "description": "A long-term or short-term goal",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["short-term", "long-term"] },
+        "status": { "type": "string", "enum": ["active", "achieved", "paused"] },
+        "target_date": { "type": "string", "format": "date-time" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "title"]
+    },
+    "FocusSession": {
+      "title": "Focus Session",
+      "description": "A recorded focus session",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "start_time": { "type": "string", "format": "date-time" },
+        "end_time": { "type": "string", "format": "date-time" },
+        "duration_minutes": { "type": "integer" },
+        "distractions_count": { "type": "integer" },
+        "efficiency_score": { "type": "integer" }
+      },
+      "required": ["user_id", "start_time"]
+    },
+    "AiInsight": {
+      "title": "AI Insight",
+      "description": "Generated insight from AI",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "insight_text": { "type": "string" },
+        "type": { "type": "string" },
+        "is_read": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "insight_text"]
+    },
+    "MotivationState": {
+      "title": "Motivation State",
+      "description": "Current motivation metrics for the user",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "current_streak": { "type": "integer" },
+        "focus_streak": { "type": "integer" },
+        "last_active_date": { "type": "string", "format": "date" },
+        "recovery_mode": { "type": "boolean" },
+        "recovery_completions": { "type": "integer" },
+        "daily_notifications_count": { "type": "integer" },
+        "last_notification_date": { "type": "string", "format": "date" },
+        "escalation_level": { "type": "integer" }
+      },
+      "required": ["user_id"]
+    },
+    "DailyScore": {
+      "title": "Daily Score",
+      "description": "Daily performance score",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "score": { "type": "integer" },
+        "tasks_completed": { "type": "integer" },
+        "focus_minutes": { "type": "integer" },
+        "consistency_bonus": { "type": "integer" }
+      },
+      "required": ["user_id", "date", "score"]
+    },
+    "ReminderLog": {
+      "title": "Reminder Log",
+      "description": "History of reminders sent to the user",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "task_id": { "type": "string" },
+        "type": { "type": "string", "enum": ["start_now", "progress_nudge", "reset"] },
+        "sent_at": { "type": "string", "format": "date-time" },
+        "responded_at": { "type": "string", "format": "date-time" },
+        "action_taken": { "type": "boolean" }
+      },
+      "required": ["user_id", "sent_at"]
     }
   },
   "firestore": {
@@ -40,6 +150,34 @@
     "/users/{userId}/tasks/{taskId}": {
       "schema": "Task",
       "description": "User specific tasks"
+    },
+    "/users/{userId}/habits/{habitId}": {
+      "schema": "Habit",
+      "description": "User specific habits"
+    },
+    "/users/{userId}/goals/{goalId}": {
+      "schema": "Goal",
+      "description": "User specific goals"
+    },
+    "/users/{userId}/focus_sessions/{sessionId}": {
+      "schema": "FocusSession",
+      "description": "User focus sessions"
+    },
+    "/users/{userId}/ai_insights/{insightId}": {
+      "schema": "AiInsight",
+      "description": "User AI insights"
+    },
+    "/users/{userId}/motivation/state": {
+      "schema": "MotivationState",
+      "description": "Current motivation state"
+    },
+    "/users/{userId}/daily_scores/{scoreId}": {
+      "schema": "DailyScore",
+      "description": "Historical daily scores"
+    },
+    "/users/{userId}/reminder_logs/{logId}": {
+      "schema": "ReminderLog",
+      "description": "Logs of sent reminders"
     }
   }
 }
