@@ -2,6 +2,8 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Zap, Plus } from 'lucide-react';
 import { MissionCard } from '../missions/MissionCard';
+import { TaskFilter } from '../shared/TaskFilter';
+import { EmptyState } from '../shared/EmptyState';
 import { Mission } from '../../types';
 
 interface MissionMatrixProps {
@@ -74,17 +76,7 @@ export const MissionMatrix: React.FC<MissionMatrixProps> = ({
             {theme.id === 'elite' ? 'Tactical Asset Management & Deployment' : theme.id === 'simple' ? 'Keep track of everything you need to do!' : 'Manage your daily focus items.'}
           </p>
         </div>
-        <div className={`flex p-1.5 rounded-[20px] md:rounded-[24px] border overflow-x-auto no-scrollbar bg-surface border-border`}>
-          {(['all', 'pending', 'completed', 'overdue'] as const).map(f => (
-            <button 
-              key={f}
-              onClick={() => setTaskFilter(f)}
-              className={`px-4 md:px-8 py-2 md:py-3.5 rounded-[16px] md:rounded-[18px] text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${taskFilter === f ? 'bg-primary text-black shadow-xl shadow-primary/20' : 'text-text_secondary hover:text-text_primary'}`}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
+        <TaskFilter value={taskFilter} onChange={setTaskFilter} />
       </div>
 
       <div className="space-y-8 md:space-y-10">
@@ -235,6 +227,17 @@ export const MissionMatrix: React.FC<MissionMatrixProps> = ({
             .map((mission: Mission) => (
               <MissionCard key={mission.id} mission={mission} theme={theme} handleAction={handleAction} />
             ))}
+
+          {missions.length === 0 && (
+            <EmptyState
+              type="tasks"
+              theme={theme.id}
+              onAction={() => {
+                resetForm();
+                setTitle('');
+              }}
+            />
+          )}
         </div>
       </div>
     </motion.div>

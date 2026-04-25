@@ -111,11 +111,11 @@ import {
 // Component Imports
 import { Header } from './components/layout/Header';
 import { Navigation } from './components/layout/Navigation';
-import { Dashboard } from './components/views/Dashboard';
-import { MissionMatrix } from './components/views/MissionMatrix';
-import { HabitsView as Habits } from './components/views/HabitsView';
+import { FocusScreen } from './screens/FocusScreen';
+import { TasksScreen } from './screens/TasksScreen';
+import { HabitsScreen } from './screens/HabitsScreen';
 import { TimelineMatrix } from './components/views/TimelineMatrix';
-import { SelfAwareness } from './components/views/SelfAwareness';
+import { InsightsScreen } from './screens/InsightsScreen';
 import { SettingsView } from './components/views/SettingsView';
 import { OnboardingOverlay as OnboardingFlow } from './components/onboarding/OnboardingOverlay';
 import { AiPanel } from './components/ai/AiPanel';
@@ -1726,7 +1726,7 @@ export default function App() {
       <main className="flex-1 px-6 pb-32 overflow-y-auto max-w-2xl mx-auto w-full">
         <AnimatePresence mode="wait">
           {activeTab === 'home' && (
-            <Dashboard 
+            <FocusScreen 
               missions={missions}
               theme={theme}
               motivationQuote={motivationQuote}
@@ -1741,7 +1741,7 @@ export default function App() {
             />
           )}
           {activeTab === 'tasks' && (
-            <MissionMatrix 
+            <TasksScreen 
               missions={missions}
               theme={theme}
               taskFilter={taskFilter}
@@ -1770,7 +1770,7 @@ export default function App() {
             />
           )}
           {activeTab === 'habits' && (
-            <Habits 
+            <HabitsScreen 
               consistencySystem={consistencySystem}
               theme={theme}
               resetHabitForm={resetHabitForm}
@@ -1789,7 +1789,7 @@ export default function App() {
             />
           )}
           {activeTab === 'analytics' && (
-            <SelfAwareness 
+            <InsightsScreen 
               missions={missions}
               consistencySystem={consistencySystem}
               selfAwareness={selfAwareness}
