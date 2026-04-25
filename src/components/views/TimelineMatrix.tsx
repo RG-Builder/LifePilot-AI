@@ -1,7 +1,9 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Check, Clock, CheckCircle2 } from 'lucide-react';
+import { Check, CheckCircle2 } from 'lucide-react';
 import { Mission } from '../../types';
+import { EmptyState } from '../shared/EmptyState';
+import { LoadingState } from '../shared/LoadingState';
 
 interface TimelineMatrixProps {
   timelineMatrix: Mission[];
@@ -71,14 +73,10 @@ export const TimelineMatrix: React.FC<TimelineMatrixProps> = ({
               </div>
             </div>
           </div>
-        )) : (
-          <div className={`stitch-card p-12 sm:p-24 text-center space-y-6 border-dashed ${theme.id === 'elite' ? 'border-border' : 'border-primary/20'}`}>
-            <Clock size={48} className="mx-auto text-text_secondary opacity-20" />
-            <div className="space-y-2">
-              <p className="text-text_secondary font-bold text-lg italic">{theme.id === 'elite' ? 'Timeline Matrix not initialized.' : 'No schedule generated yet.'}</p>
-              <p className="text-text_secondary text-xs font-medium">{theme.id === 'elite' ? 'Run AI Re-Route to generate your optimized path.' : 'Click the button above to plan your day!'}</p>
-            </div>
-          </div>
+        )) : loading ? (
+          <LoadingState theme={theme.id} message={theme.id === 'elite' ? 'Optimizing timeline...' : 'Building your schedule...'} />
+        ) : (
+          <EmptyState type="schedule" theme={theme.id} onAction={generateSchedule} />
         )}
       </div>
     </motion.div>

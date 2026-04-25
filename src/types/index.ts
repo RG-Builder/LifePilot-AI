@@ -3,6 +3,8 @@ import { Timestamp } from 'firebase/firestore';
 export interface Mission {
   id: string;
   title: string;
+  status: 'pending' | 'completed' | 'overdue';
+  priority?: 'high' | 'medium' | 'low';
   impact: 'low' | 'moderate' | 'high' | 'critical';
   urgency: number;
   urgency_score?: number;
@@ -13,7 +15,6 @@ export interface Mission {
   deadline?: any;
   is_habit: boolean;
   streak: number;
-  status: 'pending' | 'completed' | 'overdue';
   category: string;
   startTime?: string;
   endTime?: string;
@@ -51,6 +52,7 @@ export interface Habit {
   goal_count: number;
   current_count: number;
   streak: number;
+  category?: 'Health' | 'Mindset' | 'Growth' | 'Productivity';
   last_completed_at?: string;
   created_at?: any;
 }
@@ -59,6 +61,23 @@ export interface HabitStat {
   id: number;
   title: string;
   history: { date: string; count: number }[];
+}
+
+
+export interface ScheduleItem {
+  id: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  duration: string;
+  type: 'deep-work' | 'meeting' | 'admin' | 'break' | 'routine';
+  completed: boolean;
+}
+
+export interface HabitHistory {
+  date: string;
+  completedHabits: string[];
+  completionRate: number;
 }
 
 export interface MotivationState {

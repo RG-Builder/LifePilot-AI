@@ -1,7 +1,8 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Plus, Dumbbell } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { HabitCard } from '../habits/HabitCard';
+import { EmptyState } from '../shared/EmptyState';
 import { Habit } from '../../types';
 
 interface HabitsViewProps {
@@ -55,16 +56,11 @@ export const HabitsView: React.FC<HabitsViewProps> = ({
         ))}
 
         {consistencySystem.length === 0 && (
-          <div className="p-12 md:p-24 text-center border border-dashed border-border rounded-[32px] md:rounded-[48px] bg-surface/50">
-            <Dumbbell size={48} className="mx-auto mb-6 opacity-10 text-text_secondary" />
-            <p className="font-black uppercase tracking-[0.3em] text-[10px] md:text-sm text-text_secondary">No consistency protocols active</p>
-            <button 
-              onClick={() => { resetHabitForm(); setShowHabitModal(true); }}
-              className="mt-6 px-8 py-4 bg-primary/10 text-primary rounded-xl font-black uppercase tracking-widest text-xs hover:bg-primary/20 transition-all"
-            >
-              Initialize First Protocol
-            </button>
-          </div>
+          <EmptyState
+            type="habits"
+            theme={theme.id}
+            onAction={() => { resetHabitForm(); setShowHabitModal(true); }}
+          />
         )}
       </div>
     </motion.div>
