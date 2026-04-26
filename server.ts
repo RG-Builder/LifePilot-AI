@@ -221,9 +221,11 @@ async function startServer() {
 
       CREATE TABLE IF NOT EXISTS ai_cache (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        prompt_hash TEXT UNIQUE,
+        user_id INTEGER NOT NULL DEFAULT 0,
+        prompt_hash TEXT NOT NULL,
         response TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, prompt_hash)
       );
     `);
 
@@ -240,6 +242,39 @@ async function startServer() {
       "ALTER TABLE payments ADD COLUMN currency TEXT DEFAULT 'INR'",
     ];
     migrations.forEach(m => { try { db.exec(m); } catch (e) {} });
+
+    // Migrate ai_cache to user-isolated cache keys (safe for existing DBs)
+    try {
+      const aiCacheColumns = db.prepare("PRAGMA table_info(ai_cache)").all() as Array<{ name: string }>;
+      const hasUserIdColumn = aiCacheColumns.some((column) => column.name === "user_id");
+
+      if (!hasUserIdColumn) {
+        db.exec(`
+          BEGIN TRANSACTION;
+          CREATE TABLE ai_cache_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL DEFAULT 0,
+            prompt_hash TEXT NOT NULL,
+            response TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, prompt_hash)
+          );
+          INSERT INTO ai_cache_new (id, user_id, prompt_hash, response, created_at)
+          SELECT id, 0, prompt_hash, response, created_at FROM ai_cache;
+          DROP TABLE ai_cache;
+          ALTER TABLE ai_cache_new RENAME TO ai_cache;
+          COMMIT;
+        `);
+        console.log("ai_cache migrated to user-isolated schema.");
+      } else {
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_cache_user_prompt_hash ON ai_cache(user_id, prompt_hash);");
+      }
+    } catch (e: any) {
+      try { db.exec("ROLLBACK;"); } catch {}
+      console.error("ai_cache migration failed:", e.message);
+      throw e;
+    }
+
     console.log("Database initialized successfully.");
 
     const adminAccount = db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin") as any;
@@ -570,8 +605,11 @@ async function startServer() {
     }
 
     // 1. Check Caching (Optimization: minimize redundant calls)
-    const promptHash = crypto.createHash('sha256').update(prompt + systemInstruction).digest('hex');
-    const cachedResponse = db.prepare("SELECT response FROM ai_cache WHERE prompt_hash = ?").get(promptHash) as any;
+    const promptHash = crypto
+      .createHash('sha256')
+      .update(`${userId}:${prompt}:${systemInstruction}`)
+      .digest('hex');
+    const cachedResponse = db.prepare("SELECT response FROM ai_cache WHERE user_id = ? AND prompt_hash = ?").get(userId, promptHash) as any;
     if (cachedResponse) {
       console.log(`AI Cache Hit for user ${userId}`);
       return { text: cachedResponse.response, cached: true };
@@ -670,7 +708,7 @@ async function startServer() {
 
       // 4. Log Usage & Cache
       db.prepare("INSERT INTO usage_logs (user_id, tokens_used, cost) VALUES (?, ?, ?)").run(userId, tokensUsed, 0);
-      db.prepare("INSERT OR IGNORE INTO ai_cache (prompt_hash, response) VALUES (?, ?)").run(promptHash, aiText);
+      db.prepare("INSERT OR IGNORE INTO ai_cache (user_id, prompt_hash, response) VALUES (?, ?, ?)").run(userId, promptHash, aiText);
 
       return { text: aiText, cached: false, model: result.model, reasoningTokens: result.reasoningTokens };
     } catch (error: any) {
