@@ -241,6 +241,11 @@ async function startServer() {
     ];
     migrations.forEach(m => { try { db.exec(m); } catch (e) {} });
     console.log("Database initialized successfully.");
+
+    const adminAccount = db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin") as any;
+    if (!adminAccount) {
+      console.warn("SECURITY WARNING: No admin account found in users table. Admin routes will be inaccessible until at least one user has role=admin.");
+    }
   } catch (e: any) {
     console.error("Database initialization failed:", e.message);
     throw e; // Re-throw to be caught by startServer().catch()
@@ -534,6 +539,15 @@ async function startServer() {
       res.status(401).json({ error: "Invalid authentication" });
     }
   };
+
+  const requireAdmin = (req: any, res: any, next: any) => {
+    if (!req.user || req.user.role !== "admin") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    next();
+  };
+
+  app.use("/api/admin", verifyFirebaseToken, requireAdmin);
 
   // AI Gateway Logic (OpenRouter Multi-Model)
   const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -975,8 +989,7 @@ async function startServer() {
   });
 
   // Admin Stats
-  app.get("/api/admin/stats", verifyFirebaseToken, (req: any, res) => {
-    // In a real app, we'd check if req.user.isAdmin
+  app.get("/api/admin/stats", (req: any, res) => {
     const totalUsers = db.prepare("SELECT COUNT(*) as count FROM users").get() as any;
     const premiumUsers = db.prepare("SELECT COUNT(*) as count FROM users WHERE subscription_plan = 'premium'").get() as any;
     const totalTasks = db.prepare("SELECT COUNT(*) as count FROM tasks").get() as any;
