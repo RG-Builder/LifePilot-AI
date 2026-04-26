@@ -19,6 +19,7 @@ export const AiPanel: React.FC<AiPanelProps> = ({
   setShowAiPanel,
   MODEL_NAME
 }) => {
+  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY?.trim() || '';
   const [query, setQuery] = useState('');
   const [chat, setChat] = useState<{ role: 'user' | 'ai', text: string }[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -28,10 +29,14 @@ export const AiPanel: React.FC<AiPanelProps> = ({
     const userMsg = query;
     setQuery('');
     setChat(prev => [...prev, { role: 'user', text: userMsg }]);
+    if (!geminiApiKey) {
+      setChat(prev => [...prev, { role: 'ai', text: "AI is unavailable: missing VITE_GEMINI_API_KEY." }]);
+      return;
+    }
     setIsGenerating(true);
 
     try {
-      const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const genAI = new GoogleGenAI({ apiKey: geminiApiKey });
       const response = await genAI.models.generateContent({
         model: MODEL_NAME,
         contents: `User Query: ${userMsg}\nContext: ${JSON.stringify({ missions, consistencySystem, userProfile })}\nAs an AI Life Architect, provide a concise, high-impact response.`,
