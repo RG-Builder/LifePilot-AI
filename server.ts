@@ -1138,11 +1138,11 @@ async function startServer() {
 
     // Advanced analytics for premium users
     const completionRateByDay = db.prepare(`
-      SELECT date(last_completed_at) as day, COUNT(*) as count 
-      FROM tasks 
-      WHERE user_id = ? AND status = 'completed' AND last_completed_at IS NOT NULL
-      GROUP BY day 
-      ORDER BY day DESC 
+      SELECT date(completed_at) as day, COUNT(*) as count
+      FROM tasks
+      WHERE user_id = ? AND status = 'completed' AND completed_at IS NOT NULL
+      GROUP BY day
+      ORDER BY day DESC
       LIMIT 7
     `).all(userId);
 
