@@ -267,40 +267,127 @@ async function startServer() {
     legacyHeaders: false,
   });
 
+  const isProduction = process.env.NODE_ENV === "production";
+  const defaultProdCorsOrigins = [
+    "https://lifepilotai.app",
+    "https://www.lifepilotai.app",
+  ];
+  const allowedCorsOrigins = (process.env.CORS_ALLOWED_ORIGINS || defaultProdCorsOrigins.join(","))
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const corsCredentialsEnabled = process.env.CORS_ALLOW_CREDENTIALS === "true";
+
+  // Required third-party origins (documented for CSP/CORS audits):
+  // - Firebase: https://*.firebaseapp.com, https://*.firebaseauth.com, https://*.firebaseio.com, https://*.firebasestorage.app
+  // - Razorpay: https://checkout.razorpay.com, https://api.razorpay.com, https://lumberjack.razorpay.com
+  // - Google Auth: https://accounts.google.com, https://apis.google.com, https://*.googleapis.com, https://www.gstatic.com
+  const thirdPartyOrigins = {
+    firebase: [
+      "https://*.firebaseapp.com",
+      "https://*.firebaseauth.com",
+      "https://*.firebaseio.com",
+      "https://*.firebasestorage.app",
+    ],
+    razorpay: [
+      "https://checkout.razorpay.com",
+      "https://api.razorpay.com",
+      "https://lumberjack.razorpay.com",
+    ],
+    googleAuth: [
+      "https://accounts.google.com",
+      "https://apis.google.com",
+      "https://*.googleapis.com",
+      "https://www.gstatic.com",
+    ],
+  };
+
+  const devCspDirectives = {
+    defaultSrc: ["'self'"],
+    scriptSrc: [
+      "'self'",
+      "'unsafe-inline'",
+      "https://checkout.razorpay.com",
+      ...thirdPartyOrigins.googleAuth,
+      ...thirdPartyOrigins.firebase,
+      "https://*.googletagmanager.com",
+    ],
+    styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+    fontSrc: ["'self'", "https://fonts.gstatic.com"],
+    imgSrc: ["'self'", "data:", "https://picsum.photos", "https://lh3.googleusercontent.com", "https://*.google-analytics.com", "https://*.google.com"],
+    connectSrc: [
+      "'self'",
+      "ws://localhost:*",
+      "http://localhost:*",
+      "https://*.run.app",
+      ...thirdPartyOrigins.razorpay,
+      ...thirdPartyOrigins.googleAuth,
+      ...thirdPartyOrigins.firebase,
+      "https://*.google-analytics.com",
+      "https://*.googletagmanager.com",
+      "https://*.google.com",
+      "https://*.gstatic.com",
+    ],
+    frameSrc: ["'self'", "https://api.razorpay.com", ...thirdPartyOrigins.firebase, "https://*.google.com", "https://accounts.google.com"],
+    frameAncestors: ["'self'", "https://*.google.com", "https://*.run.app", "http://localhost:*", ...thirdPartyOrigins.firebase],
+  };
+
+  const prodCspDirectives = {
+    defaultSrc: ["'self'"],
+    scriptSrc: [
+      "'self'",
+      "https://checkout.razorpay.com",
+      ...thirdPartyOrigins.googleAuth,
+      ...thirdPartyOrigins.firebase,
+      "https://*.googletagmanager.com",
+    ],
+    styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+    fontSrc: ["'self'", "https://fonts.gstatic.com"],
+    imgSrc: ["'self'", "data:", "https://picsum.photos", "https://lh3.googleusercontent.com", "https://*.google-analytics.com", "https://*.google.com"],
+    connectSrc: [
+      "'self'",
+      "https://*.run.app",
+      ...thirdPartyOrigins.razorpay,
+      ...thirdPartyOrigins.googleAuth,
+      ...thirdPartyOrigins.firebase,
+      "https://*.google-analytics.com",
+      "https://*.googletagmanager.com",
+      "https://*.google.com",
+      "https://*.gstatic.com",
+    ],
+    frameSrc: ["'self'", "https://api.razorpay.com", ...thirdPartyOrigins.firebase, "https://*.google.com", "https://accounts.google.com"],
+    frameAncestors: ["'self'", "https://*.google.com", "https://*.run.app", ...thirdPartyOrigins.firebase],
+  };
+
   app.use(helmet({
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://checkout.razorpay.com", "https://*.googleapis.com", "https://*.googletagmanager.com", "https://www.gstatic.com", "https://*.firebaseapp.com", "https://*.firebaseauth.com", "https://apis.google.com", "https://accounts.google.com"],
-        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-        fontSrc: ["'self'", "https://fonts.gstatic.com"],
-        imgSrc: ["'self'", "data:", "https://picsum.photos", "https://lh3.googleusercontent.com", "https://*.google-analytics.com", "https://*.google.com"],
-        connectSrc: [
-          "'self'", 
-          "https://*.run.app",
-          "https://api.razorpay.com", 
-          "https://lumberjack.razorpay.com",
-          "https://*.googleapis.com",
-          "https://*.firebaseio.com",
-          "https://*.firebaseapp.com",
-          "https://*.firebaseauth.com",
-          "https://*.firebasestorage.app",
-          "https://*.google-analytics.com",
-          "https://*.googletagmanager.com",
-          "https://*.google.com",
-          "https://*.gstatic.com",
-          "https://apis.google.com",
-          "https://accounts.google.com"
-        ],
-        frameSrc: ["'self'", "https://api.razorpay.com", "https://*.firebaseapp.com", "https://*.firebaseauth.com", "https://*.google.com", "https://accounts.google.com"],
-        frameAncestors: ["'self'", "https://*.google.com", "https://*.run.app", "http://localhost:*", "https://*.firebaseapp.com", "https://*.firebaseauth.com"],
-      },
+      directives: isProduction ? prodCspDirectives : devCspDirectives,
     },
     crossOriginEmbedderPolicy: false,
     crossOriginOpenerPolicy: false,
     frameguard: false,
   }));
-  app.use(cors());
+  app.use(cors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (!isProduction) {
+        return callback(null, true);
+      }
+
+      if (allowedCorsOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("CORS origin not allowed"));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    credentials: corsCredentialsEnabled,
+    optionsSuccessStatus: 204,
+  }));
   app.use(compression());
   app.use(express.json());
   app.get("/manifest.json", (req, res) => {
