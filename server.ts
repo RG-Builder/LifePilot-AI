@@ -211,7 +211,9 @@ async function startServer() {
         user_id INTEGER NOT NULL,
         razorpay_order_id TEXT,
         razorpay_payment_id TEXT,
+        plan_id TEXT,
         amount REAL,
+        currency TEXT DEFAULT 'INR',
         status TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id)
@@ -234,6 +236,8 @@ async function startServer() {
       "ALTER TABLE tasks ADD COLUMN urgency_score INTEGER DEFAULT 5",
       "ALTER TABLE tasks ADD COLUMN estimated_effort INTEGER DEFAULT 3",
       "ALTER TABLE tasks ADD COLUMN impact_level INTEGER DEFAULT 5",
+      "ALTER TABLE payments ADD COLUMN plan_id TEXT",
+      "ALTER TABLE payments ADD COLUMN currency TEXT DEFAULT 'INR'",
     ];
     migrations.forEach(m => { try { db.exec(m); } catch (e) {} });
     console.log("Database initialized successfully.");
@@ -790,21 +794,33 @@ async function startServer() {
     key_secret: process.env.RAZORPAY_KEY_SECRET || 'dummy_secret',
   });
 
+  const PLAN_PRICING: Record<string, { amount: number; currency: string; subscriptionPlan: string }> = {
+    premium_monthly: { amount: 499, currency: "INR", subscriptionPlan: "premium" },
+    premium_annual: { amount: 4999, currency: "INR", subscriptionPlan: "premium" },
+  };
+
   app.post("/api/payments/create-order", verifyFirebaseToken, async (req: any, res) => {
-    const { amount, currency = "INR" } = req.body;
+    const { planId } = req.body;
     const userId = req.user.id;
+    const planConfig = PLAN_PRICING[planId];
+
+    if (!planId || !planConfig) {
+      return res.status(400).json({ error: "Invalid planId" });
+    }
 
     try {
       const options = {
-        amount: amount * 100, // amount in the smallest currency unit
-        currency,
+        amount: planConfig.amount * 100, // amount in the smallest currency unit
+        currency: planConfig.currency,
         receipt: `receipt_order_${userId}_${Date.now()}`,
+        notes: { userId: String(userId), planId },
       };
       const order = await razorpay.orders.create(options);
       
-      db.prepare("INSERT INTO payments (user_id, razorpay_order_id, amount, status) VALUES (?, ?, ?, ?)").run(userId, order.id, amount, 'created');
+      db.prepare("INSERT INTO payments (user_id, razorpay_order_id, plan_id, amount, currency, status) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(userId, order.id, planId, planConfig.amount, planConfig.currency, 'created');
       
-      res.json(order);
+      res.json({ ...order, planId });
     } catch (error) {
       res.status(500).json({ error: "Order creation failed" });
     }
@@ -815,10 +831,10 @@ async function startServer() {
   app.post("/api/payments/verify-payment", verifyFirebaseToken, (req, res) => res.redirect(307, "/api/payments/verify"));
 
   app.post("/api/payments/verify", verifyFirebaseToken, async (req: any, res: any) => {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, planId } = req.body;
     const userId = req.user.id;
 
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !planId) {
       return res.status(400).json({ error: "Missing payment verification details" });
     }
 
@@ -834,14 +850,31 @@ async function startServer() {
     const generated_signature = hmac.digest("hex");
 
     if (generated_signature === razorpay_signature) {
+      const payment = db.prepare(
+        "SELECT user_id, plan_id, amount, currency, status FROM payments WHERE razorpay_order_id = ?"
+      ).get(razorpay_order_id) as any;
+      const expectedPlan = PLAN_PRICING[planId];
+
+      if (!payment || payment.user_id !== userId || payment.plan_id !== planId || !expectedPlan) {
+        return res.status(403).json({ error: "Order verification failed for user/plan" });
+      }
+
+      if (payment.amount !== expectedPlan.amount || payment.currency !== expectedPlan.currency) {
+        return res.status(400).json({ error: "Payment amount/currency mismatch" });
+      }
+
+      if (payment.status !== "created") {
+        return res.status(400).json({ error: "Payment is not in a verifiable state" });
+      }
+
       // Update subscription ONLY after verified payment
       db.transaction(() => {
         db.prepare("UPDATE payments SET razorpay_payment_id = ?, status = 'captured' WHERE razorpay_order_id = ?").run(razorpay_payment_id, razorpay_order_id);
-        db.prepare("UPDATE users SET subscription_plan = 'premium' WHERE id = ?").run(userId);
+        db.prepare("UPDATE users SET subscription_plan = ? WHERE id = ?").run(expectedPlan.subscriptionPlan, userId);
       })();
       
       console.log(`Payment verified for user ${userId}: ${razorpay_payment_id}`);
-      res.json({ success: true, message: "Subscription upgraded successfully" });
+      res.json({ success: true, message: "Subscription upgraded successfully", planId });
     } else {
       console.warn(`SUSPICIOUS: Invalid payment signature attempt for user ${userId}`);
       res.status(400).json({ error: "Payment verification failed" });
