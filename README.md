@@ -15,6 +15,15 @@ View your app in AI Studio: https://ai.studio/apps/081e94ee-3f0c-4e02-8c9b-0200c
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set `VITE_GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Deployment environment variables
+
+Configure these variables in your hosting/deployment provider:
+
+- `VITE_GEMINI_API_KEY`: Gemini key used by the Vite client bundle.
+- `VITE_RAZORPAY_KEY_ID`: Razorpay public key used by checkout initialization.
+
+Server-only keys (for `server.ts`) should remain non-`VITE_` prefixed and never be exposed to the browser.

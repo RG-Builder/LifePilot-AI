@@ -143,7 +143,14 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
 
   // AI Initialization
-  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY?.trim() || '';
+  const getGeminiClient = () => {
+    if (!geminiApiKey) {
+      setError("AI features are unavailable: missing VITE_GEMINI_API_KEY.");
+      return null;
+    }
+    return new GoogleGenAI({ apiKey: geminiApiKey });
+  };
   const MODEL_NAME = "gemini-flash-latest";
 
   // Firestore Collections
@@ -484,6 +491,8 @@ export default function App() {
     Return a JSON array of tasks with suggested start and end times.`;
 
     try {
+      const ai = getGeminiClient();
+      if (!ai) return;
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
         contents: prompt,
@@ -520,6 +529,8 @@ export default function App() {
     Return a JSON array of objects with { insight_text, type }.`;
 
     try {
+      const ai = getGeminiClient();
+      if (!ai) return;
       const response = await ai.models.generateContent({
         model: MODEL_NAME,
         contents: prompt,
@@ -1004,7 +1015,8 @@ export default function App() {
 
     // Optional: Use AI to refine if there are many tasks
     if (pendingTasks.length > 5) {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = getGeminiClient();
+      if (!ai) return;
       const prompt = `Analyze these tasks and identify the single most important "Next Strategic Action" to take right now.
       Tasks: ${JSON.stringify(pendingTasks.map(t => ({ id: t.id, title: t.title, importance: t.importance, impact: t.impact_level, urgency: t.urgency_score })))}
       User Profile: ${JSON.stringify(userProfile)}
@@ -1167,7 +1179,7 @@ export default function App() {
       const order = await res.json();
       
       const options = {
-        key: process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_dummy',
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_dummy',
         amount: order.amount,
         currency: order.currency,
         name: "LifePilot AI",
